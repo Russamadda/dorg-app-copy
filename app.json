@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "DORG",
+    "slug": "dorg-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F4F0"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "no.dorg.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F5F4F0"
+      },
+      "package": "no.dorg.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "DORG bruker bilder til firmalogo."
+        }
+      ],
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ]
+    ],
+    "scheme": "dorg-app",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
