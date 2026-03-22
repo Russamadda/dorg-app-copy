@@ -256,7 +256,10 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="interactive"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 16 }]}
+            contentContainerStyle={[
+              styles.content,
+              { paddingBottom: insets.bottom + (visJustering ? 96 : 16) },
+            ]}
           >
           {/* ═══ ETTER GENERERING ═══ */}
           {erGenerert && (

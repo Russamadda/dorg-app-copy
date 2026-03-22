@@ -1,0 +1,10 @@
+
+> dorg-app@1.0.0 start
+> expo start --offline
+
+env: load .env
+env: export EXPO_PUBLIC_SUPABASE_URL EXPO_PUBLIC_SUPABASE_ANON_KEY EXPO_PUBLIC_OPENAI_API_KEY EXPO_PUBLIC_RESEND_API_KEY
+Networking has been disabled
+Starting project at C:\Users\deivi\Desktop\dorg-app
+› Port 8081 is being used by another process
+› Skipping dev server

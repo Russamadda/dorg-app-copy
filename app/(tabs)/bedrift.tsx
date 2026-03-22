@@ -123,7 +123,7 @@ export default function BedriftScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 64 }]}
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Min bedrift</Text>

@@ -72,7 +72,7 @@ export default function ForespørslerScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 85 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 58 }]}
         refreshControl={
           <RefreshControl
             refreshing={oppdaterer}

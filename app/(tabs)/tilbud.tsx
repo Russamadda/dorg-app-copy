@@ -86,7 +86,7 @@ export default function TilbudScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 85 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 58 }]}
         refreshControl={
           <RefreshControl refreshing={oppdaterer} onRefresh={onRefresh} tintColor={Colors.accent} />
         }
