@@ -1,4 +1,61 @@
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY!
+const systemPrompt = `Du er en vennlig og profesjonell 
+tilbudsassistent for norske håndverkere. 
+Skriv tilbud som høres menneskelige og varme ut — 
+ikke robotaktig eller corporate. Tenk: en flink håndverker 
+som skriver til en nabo.
+
+VIKTIG FORMATERING:
+Bruk ALLTID denne eksakte strukturen uten ### eller **:
+
+[Tittel på én linje, f.eks: Tilbud – Bytte av gulv]
+
+Til: [kundenavn]
+Fra: [firmanavn]
+Dato: [dato]
+Adresse: [adresse]
+Tlf: [telefon]
+E-post: [epost]
+
+---
+
+[2-3 setninger som introduserer tilbudet på en varm, 
+menneskelig måte. F.eks: Takk for at du tok kontakt! 
+Vi har sett på jobben og sender deg gjerne et tilbud.]
+
+Om jobben:
+- Jobbtype: [type]
+- Omfang: [detaljer]
+- Estimert tid: [timer] timer
+- Materialer: kr [beløp]
+
+Oppstart:
+Vi foreslår oppstart [dato], ca. 5 virkedager fra i dag.
+
+Gyldighet:
+Tilbudet gjelder i 14 dager, til [dato].
+
+---
+
+Pris:
+Arbeid eks. mva:    kr [beløp]
+MVA 25%:            kr [mva]
+Totalt inkl. mva:   kr [total]
+
+[Avslutt med én varm setning. F.eks: 
+Ikke nøl med å ta kontakt om du lurer på noe!]
+
+Med vennlig hilsen,
+[firmanavn]
+
+REGLER FOR AI-OUTPUT:
+- ALDRI bruk ### for overskrifter
+- ALDRI bruk ** for bold
+- ALDRI bruk * for bullet points — bruk - i stedet
+- Tittelen skal stå på første linje, alene
+- Mellomrom mellom alle seksjoner
+- Priser formateres med mellomrom: 10 000 ikke 10000
+- Lyder menneskelig og direkte, ikke formelt`
 
 interface GenererTilbudInput {
   kundeNavn: string
@@ -15,36 +72,42 @@ interface GenererTilbudInput {
   justeringer?: string
 }
 
+function formatKr(verdi: number): string {
+  return verdi.toLocaleString('nb-NO')
+}
+
 function byggPrompt(input: GenererTilbudInput): string {
   const mva = Math.round(input.prisEksMva * 0.25)
   const total = input.prisEksMva + mva
   const dato = input.dagensdato ?? new Date().toLocaleDateString('nb-NO')
+  const oppstart = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toLocaleDateString('nb-NO')
+  const gyldigTil = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toLocaleDateString('nb-NO')
 
-  return `Lag en komplett tilbudstekst basert på disse opplysningene:
+  return `Bruk disse faktiske opplysningene når du skriver tilbudet:
 
-Dato i dag: ${dato}
-Firmanavn: ${input.firmanavn}
-${input.adresse ? `Firmaadresse: ${input.adresse}` : ''}
-${input.telefon ? `Telefon: ${input.telefon}` : ''}
-${input.epost ? `E-post: ${input.epost}` : ''}
 Kundenavn: ${input.kundeNavn}
-Fritekst om jobben: ${input.jobbBeskrivelse}
-${input.timer ? `Estimert timer: ${input.timer} t` : ''}
-${input.materialkostnad ? `Materialkostnad: ${input.materialkostnad} NOK` : ''}
+Firmanavn: ${input.firmanavn}
+Dato: ${dato}
+Adresse: ${input.adresse ?? 'Ikke oppgitt'}
+Tlf: ${input.telefon ?? 'Ikke oppgitt'}
+E-post: ${input.epost ?? 'Ikke oppgitt'}
+Om jobben: ${input.jobbBeskrivelse}
+Jobbtype: Utled naturlig jobbtype fra beskrivelsen
+Estimert tid: ${input.timer ?? 0} timer
+Materialer: kr ${formatKr(input.materialkostnad ?? 0)}
+Arbeid eks. mva: kr ${formatKr(input.prisEksMva)}
+MVA 25%: kr ${formatKr(mva)}
+Totalt inkl. mva: kr ${formatKr(total)}
+Oppstart: ${oppstart}
+Gyldighet: ${gyldigTil}
 ${input.timepris ? `Timepris: ${input.timepris} kr/t` : ''}
-Pris eks. MVA: ${input.prisEksMva} NOK
-MVA (25%): ${mva} NOK
-Totalsum inkl. MVA: ${total} NOK
-${input.justeringer ? `Justeringer: ${input.justeringer}` : ''}
+${input.justeringer ? `Justeringer som må innarbeides: ${input.justeringer}` : ''}
 
-Krav:
-- Les fritekstbeskrivelsen og forstå hva slags jobb det er.
-- Utled selv jobbtype, adresse hvis nevnt, og realistisk omfang av arbeidet.
-- Bruk dato "${dato}" — IKKE skriv [Dagens dato] eller plassholdere.
-- Foreslå oppstart om 5 virkedager fra ${dato}.
-- Sett tilbudets gyldighet til 14 dager fra ${dato}.
-- Svar i markdown med tydelige overskrifter, punktlister og en egen prisseksjon.
-- Vaer konkret, profesjonell og tillitsvekkende på norsk bokmaal.`
+Viktig:
+- Bruk de eksakte tallene og datoene over
+- Ikke bruk markdownsyntaks
+- Ikke bruk plassholdere
+- Følg strukturen i systeminstruksen nøyaktig`
 }
 
 export async function genererTilbud(input: GenererTilbudInput): Promise<string> {
@@ -63,15 +126,7 @@ export async function genererTilbud(input: GenererTilbudInput): Promise<string> 
       messages: [
         {
           role: 'system',
-          content:
-            'Du er en tilbudsassistent for norske håndverkere. Generer et profesjonelt tilbud på norsk bokmål. ' +
-            'VIKTIG: Bruk ALLTID de eksakte tallene fra input for pris — ikke endre dem. ' +
-            'Bruk dagens faktiske dato som er oppgitt i input — IKKE skriv [Dagens dato] eller lignende plassholdere. ' +
-            'Ikke bruk plassholdere som [Telefonnummer], [E-post] eller [Firmanavn] — bruk de faktiske verdiene fra input. ' +
-            'Formater prisseksjonen ALLTID eksakt slik:\n' +
-            'Pris eks. MVA: X NOK\nMVA (25%): Y NOK\nTotalsum inkl. MVA: Z NOK\n' +
-            'Ikke bruk ** rundt tall i prisseksjonen. ' +
-            'Formater svaret med markdown: overskrifter (##), punktlister (-) og en tydelig prisseksjon.',
+          content: systemPrompt,
         },
         {
           role: 'user',

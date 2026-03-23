@@ -99,7 +99,6 @@ function fraPrishistorikkRad(rad: PrishistorikkRad): Prishistorikk {
 // ─── Forespørsler ────────────────────────────────────────────────────────────
 
 export async function hentForespørsler(firmaId: string): Promise<Forespørsel[]> {
-  console.log('[supabase] hentForespørsler firmaId:', firmaId)
   const { data, error } = await supabase
     .from('tilbud')
     .select('*')
@@ -107,7 +106,6 @@ export async function hentForespørsler(firmaId: string): Promise<Forespørsel[]
     .eq('status', 'avventer')
     .order('opprettet_dato', { ascending: false })
 
-  console.log('[supabase] hentForespørsler result:', { count: data?.length, error })
   if (error) throw new Error(error.message)
   return (data as TilbudRad[]).map(fraForespørselRad)
 }
@@ -183,7 +181,6 @@ export async function oppdaterForespørsel(
 }
 
 export async function hentSendteTilbud(firmaId: string): Promise<Forespørsel[]> {
-  console.log('[supabase] hentSendteTilbud firmaId:', firmaId)
   const { data, error } = await supabase
     .from('tilbud')
     .select('*')
@@ -191,7 +188,6 @@ export async function hentSendteTilbud(firmaId: string): Promise<Forespørsel[]>
     .neq('status', 'avventer')
     .order('opprettet_dato', { ascending: false })
 
-  console.log('[supabase] hentSendteTilbud result:', { count: data?.length, error })
   if (error) throw new Error(error.message)
   return (data as TilbudRad[]).map(fraForespørselRad)
 }

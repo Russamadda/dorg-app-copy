@@ -1,5 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import { Colors } from '../constants/colors'
 
 interface Props {
@@ -7,13 +8,23 @@ interface Props {
 }
 
 export default function TopBar({ showNotification = false }: Props) {
+  const router = useRouter()
+
   return (
     <View style={styles.container}>
       <Text style={styles.logo}>DORG</Text>
-      <TouchableOpacity style={styles.notifWrapper}>
-        <Ionicons name="notifications-outline" size={24} color={Colors.textPrimary} />
-        {showNotification && <View style={styles.notifDot} />}
-      </TouchableOpacity>
+      <View style={styles.actions}>
+        <TouchableOpacity style={styles.iconBtn}>
+          <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
+          {showNotification && <View style={styles.notifDot} />}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={() => router.navigate('/(tabs)/bedrift')}
+        >
+          <Ionicons name="business-outline" size={22} color={Colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
     </View>
   )
 }
@@ -33,13 +44,19 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     color: Colors.textPrimary,
   },
-  notifWrapper: {
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: {
     position: 'relative',
+    padding: 2,
   },
   notifDot: {
     position: 'absolute',
-    top: 0,
-    right: 0,
+    top: 2,
+    right: 2,
     width: 8,
     height: 8,
     borderRadius: 4,

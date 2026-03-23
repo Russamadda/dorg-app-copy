@@ -19,6 +19,7 @@ import TopBar from '../../components/TopBar'
 import ForespørselKort from '../../components/ForespørselKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
 import ToastMessage from '../../components/ToastMessage'
+import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
 
 export default function ForespørslerScreen() {
   const insets = useSafeAreaInsets()
@@ -72,7 +73,7 @@ export default function ForespørslerScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 58 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: getFloatingTabBarPadding(insets.bottom) }]}
         refreshControl={
           <RefreshControl
             refreshing={oppdaterer}

@@ -30,6 +30,7 @@ import { Colors } from '../../constants/colors'
 import type { Firma } from '../../types'
 import TopBar from '../../components/TopBar'
 import ToastMessage from '../../components/ToastMessage'
+import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
 
 export default function BedriftScreen() {
   const router = useRouter()
@@ -123,7 +124,7 @@ export default function BedriftScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 64 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: getFloatingTabBarPadding(insets.bottom) }]}
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Min bedrift</Text>

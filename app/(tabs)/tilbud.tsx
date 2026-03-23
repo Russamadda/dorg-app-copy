@@ -21,6 +21,7 @@ import TilbudKort from '../../components/TilbudKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
 import TilbudDetaljerModal from '../../components/TilbudDetaljerModal'
 import ToastMessage from '../../components/ToastMessage'
+import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
 
 type Filter = 'alle' | 'godkjent' | 'avslatt' | 'sendt'
 
@@ -86,7 +87,7 @@ export default function TilbudScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 58 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: getFloatingTabBarPadding(insets.bottom) }]}
         refreshControl={
           <RefreshControl refreshing={oppdaterer} onRefresh={onRefresh} tintColor={Colors.accent} />
         }
