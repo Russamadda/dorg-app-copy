@@ -4,6 +4,11 @@ import { MaterialIcons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs'
 import Svg, { Path } from 'react-native-svg'
+import {
+  GlassView,
+  isLiquidGlassAvailable,
+  isGlassEffectAPIAvailable,
+} from 'expo-glass-effect'
 import { fabEmitter } from '../lib/fabEmitter'
 
 const ACTIVE_COLOR = '#2E7D53'
@@ -73,8 +78,11 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const barWidth = Math.min(width * 0.9, 340)
   const bottomOffset = Math.max(insets.bottom, 4)
   const [barHeight, setBarHeight] = useState(0)
+
   const leftRouteIndex = state.routes.findIndex(route => route.name === 'index')
   const rightRouteIndex = state.routes.findIndex(route => route.name === 'tilbud')
+
+  const canUseGlass = isLiquidGlassAvailable() && isGlassEffectAPIAvailable()
 
   function handleBarLayout(event: LayoutChangeEvent) {
     setBarHeight(event.nativeEvent.layout.height)
@@ -106,16 +114,52 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
         <View style={styles.barShadow}>
           <View style={styles.barClip} onLayout={handleBarLayout}>
             {barHeight > 0 ? (
-              <Svg
-                width="100%"
-                height="100%"
-                viewBox={`0 0 ${barWidth} ${barHeight}`}
-                preserveAspectRatio="none"
-                style={StyleSheet.absoluteFill}
-                pointerEvents="none"
-              >
-                <Path d={buildPillPath(barWidth, barHeight)} fill="#FFFFFF" />
-              </Svg>
+              <>
+                {canUseGlass ? (
+                  <GlassView
+                    pointerEvents="none"
+                    style={[
+                      StyleSheet.absoluteFill,
+                      styles.glassPill,
+                      { width: barWidth, height: barHeight },
+                    ]}
+                    glassEffectStyle="regular"
+                    tintColor="transparent"
+                  />
+                ) : (
+                  <View
+                    pointerEvents="none"
+                    style={[
+                      StyleSheet.absoluteFill,
+                      styles.fallbackPill,
+                      { width: barWidth, height: barHeight },
+                    ]}
+                  />
+                )}
+
+                <Svg
+                  width="100%"
+                  height="100%"
+                  viewBox={`0 0 ${barWidth} ${barHeight}`}
+                  preserveAspectRatio="none"
+                  style={StyleSheet.absoluteFill}
+                  pointerEvents="none"
+                >
+                  <Path
+                    d={buildPillPath(barWidth, barHeight)}
+                    fill="transparent"
+                  />
+                  <Path
+                    d={buildPillPath(barWidth, barHeight)}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.26)"
+                    strokeWidth={1}
+                  />
+                </Svg>
+
+                <View pointerEvents="none" style={styles.highlightTop} />
+                <View pointerEvents="none" style={styles.highlightBottom} />
+              </>
             ) : null}
 
             <View style={styles.barOverlay}>
@@ -213,6 +257,35 @@ const styles = StyleSheet.create({
   barClip: {
     overflow: 'visible',
   },
+
+  glassPill: {
+    borderRadius: PILL_RADIUS,
+  },
+  fallbackPill: {
+    borderRadius: PILL_RADIUS,
+    backgroundColor: 'rgba(255,255,255,0.82)',
+  },
+  highlightTop: {
+    position: 'absolute',
+    top: 1,
+    left: 10,
+    right: 10,
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    pointerEvents: 'none',
+  },
+  highlightBottom: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 2,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    pointerEvents: 'none',
+  },
+
   barOverlay: {
     flexDirection: 'row',
     alignItems: 'center',

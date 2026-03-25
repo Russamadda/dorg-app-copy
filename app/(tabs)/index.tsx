@@ -64,7 +64,7 @@ export default function ForespørslerScreen() {
   const avventer = forespørsler.filter(f => f.status === 'avventer').length
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={[]}>
       <TopBar />
       <ToastMessage
         message={toast.message}

@@ -6,6 +6,7 @@ import {
   ScrollView,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Keyboard,
   StyleSheet,
   ActivityIndicator,
@@ -82,8 +83,8 @@ function OppsummeringsRad({
 export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Props) {
   const insets = useSafeAreaInsets()
 
-  // Form state
   const [kundeNavn, setKundeNavn] = useState('')
+  const [kundeTelefon, setKundeTelefon] = useState('')
   const [kundeEpost, setKundeEpost] = useState('')
   const [jobbBeskrivelse, setJobbBeskrivelse] = useState('')
   const [aktivJobbtype, setAktivJobbtype] = useState('')
@@ -91,31 +92,28 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
   const [timer, setTimer] = useState(4)
   const [materiale, setMateriale] = useState(2000)
 
-  // UI state
   const [fokusertFelt, setFokusertFelt] = useState<string | null>(null)
   const [skalFokusereBeskrivelseVedRetur, setSkalFokusereBeskrivelseVedRetur] = useState(false)
 
-  // Offer state
   const [isGenerating, setIsGenerating] = useState(false)
   const [generertTekst, setGenerertTekst] = useState('')
   const [erGenerert, setErGenerert] = useState(false)
 
-  // Direct editing
   const [redigerModus, setRedigerModus] = useState(false)
   const [redigerbarTekst, setRedigerbarTekst] = useState('')
 
-  // Send
   const [sender, setSender] = useState(false)
   const [feil, setFeil] = useState('')
 
-  // Refs
   const scrollRef = useRef<ScrollView>(null)
   const kundenavnRef = useRef<TextInput>(null)
+  const telefonRef = useRef<TextInput>(null)
   const epostRef = useRef<TextInput>(null)
   const beskrivelseRef = useRef<TextInput>(null)
 
   function reset() {
     setKundeNavn('')
+    setKundeTelefon('')
     setKundeEpost('')
     setJobbBeskrivelse('')
     setAktivJobbtype('')
@@ -222,6 +220,7 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
 
       await lagreForespørsel({
         kundeNavn: kundeNavn.trim(),
+        kundeTelefon: kundeTelefon.trim() || undefined,
         kundeEpost: kundeEpost.trim(),
         jobbBeskrivelse,
         prisEksMva: estimertPris,
@@ -260,7 +259,6 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
     requestAnimationFrame(() => {
       setTimeout(() => {
         beskrivelseRef.current?.focus()
-        scrollRef.current?.scrollTo({ y: 150, animated: true })
       }, 150)
     })
   }
@@ -269,7 +267,6 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
     if (skalFokusereBeskrivelseVedRetur) {
       setTimeout(() => {
         beskrivelseRef.current?.focus()
-        scrollRef.current?.scrollTo({ y: 150, animated: true })
         setSkalFokusereBeskrivelseVedRetur(false)
       }, 150)
       return
@@ -282,9 +279,6 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
 
   function håndterBeskrivelseFocus() {
     setFokusertFelt('beskrivelse')
-    setTimeout(() => {
-      scrollRef.current?.scrollTo({ y: 160, animated: true })
-    }, 250)
   }
 
   const isLoadingState = erGenerert && isGenerating
@@ -310,337 +304,360 @@ export default function NyttTilbudModal({ visible, onClose, firma, onSendt }: Pr
         }
       }}
     >
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.header}>
-          <View style={styles.headerVenstre}>
-            {(isLoadingState || isGeneratedState) && <View style={styles.headerDot} />}
-            <Text style={styles.tittel}>Nytt tilbud</Text>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <View style={styles.header}>
+            <View style={styles.headerVenstre}>
+              {(isLoadingState || isGeneratedState) && <View style={styles.headerDot} />}
+              <Text style={styles.tittel}>Nytt tilbud</Text>
+            </View>
+            <TouchableOpacity onPress={handleClose} activeOpacity={0.7}>
+              <Text style={styles.avbryt}>Avbryt</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity onPress={handleClose} activeOpacity={0.7}>
-            <Text style={styles.avbryt}>Avbryt</Text>
-          </TouchableOpacity>
-        </View>
 
-        <View style={styles.flex}>
-          {!erGenerert && (
-            <View style={styles.screen}>
-              <ScrollView
-                ref={scrollRef}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={[
-                  styles.content,
-                  { paddingBottom: 110 + fixedBottomPadding },
-                ]}
-              >
-                <View style={styles.formBody}>
-                  <Text style={styles.seksjonLabel}>KUNDEN</Text>
+          <View style={styles.flex}>
+            {!erGenerert && (
+              <View style={styles.screen}>
+                <View
+                  style={[
+                    styles.content,
+                    styles.formContent,
+                    { paddingBottom: 110 + fixedBottomPadding },
+                  ]}
+                >
+                  <View style={styles.formBody}>
+                    <Text style={styles.seksjonLabel}>KUNDEN</Text>
 
-                  <TextInput
-                    ref={kundenavnRef}
-                    style={[styles.input, fokusertFelt === 'kundenavn' && styles.inputFocused]}
-                    placeholder="Kundenavn"
-                    placeholderTextColor={Colors.textMuted}
-                    value={kundeNavn}
-                    onChangeText={setKundeNavn}
-                    autoCapitalize="words"
-                    returnKeyType="next"
-                    blurOnSubmit={false}
-                    onSubmitEditing={() => epostRef.current?.focus()}
-                    onFocus={() => setFokusertFelt('kundenavn')}
-                    onBlur={() => setFokusertFelt(null)}
-                  />
-
-                  <TextInput
-                    ref={epostRef}
-                    style={[
-                      styles.input,
-                      { marginTop: 8 },
-                      fokusertFelt === 'epost' && styles.inputFocused,
-                    ]}
-                    placeholder="Kunde e-post"
-                    placeholderTextColor={Colors.textMuted}
-                    value={kundeEpost}
-                    onChangeText={setKundeEpost}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    returnKeyType="next"
-                    blurOnSubmit={false}
-                    onSubmitEditing={() => beskrivelseRef.current?.focus()}
-                    onFocus={() => setFokusertFelt('epost')}
-                    onBlur={() => setFokusertFelt(null)}
-                  />
-
-                  <Text style={[styles.seksjonLabel, { marginTop: 24 }]}>JOBBEN</Text>
-
-                  <TextInput
-                    ref={beskrivelseRef}
-                    style={[
-                      styles.multilineInput,
-                      fokusertFelt === 'beskrivelse' && styles.multilineInputFocused,
-                    ]}
-                    placeholder={'F.eks: Bytte varmtvannsbereder i bad.\nInkludere røropplegg til oppvaskmaskin.'}
-                    placeholderTextColor={Colors.textMuted}
-                    value={jobbBeskrivelse}
-                    onChangeText={setJobbBeskrivelse}
-                    multiline
-                    textAlignVertical="top"
-                    returnKeyType="done"
-                    blurOnSubmit
-                    onSubmitEditing={() => Keyboard.dismiss()}
-                    onFocus={håndterBeskrivelseFocus}
-                    onBlur={() => setFokusertFelt(null)}
-                  />
-
-                  <Text style={[styles.seksjonLabel, { marginTop: 28 }]}>TYPE JOBB</Text>
-
-                  <View style={styles.typeGrid}>
-                    {JOBBTYPER.map(type => {
-                      const aktiv = aktivJobbtype === type
-                      return (
-                        <TouchableOpacity
-                          key={type}
-                          style={[styles.typeOption, aktiv && styles.typeOptionAktiv]}
-                          onPress={() => {
-                            setAktivJobbtype(prev => (prev === type ? '' : type))
-                            Keyboard.dismiss()
-                          }}
-                          activeOpacity={0.85}
-                        >
-                          <View style={[styles.typeRadio, aktiv && styles.typeRadioAktiv]}>
-                            {aktiv ? <View style={styles.typeRadioInner} /> : null}
-                          </View>
-                          <Text style={[styles.typeOptionTekst, aktiv && styles.typeOptionTekstAktiv]}>
-                            {type}
-                          </Text>
-                        </TouchableOpacity>
-                      )
-                    })}
-                  </View>
-
-                  <View style={styles.hjulSection}>
-                    <View style={styles.hjulRad}>
-                      <ScrollWheelPicker
-                        label="ESTIMERT PRIS"
-                        value={estimertPris}
-                        onChange={setEstimertPris}
-                        values={PRIS_VERDIER}
-                        suffix="kr"
+                    <View style={styles.kundeRad}>
+                      <TextInput
+                        ref={kundenavnRef}
+                        style={[
+                          styles.input,
+                          styles.kundeNavnInput,
+                          fokusertFelt === 'kundenavn' && styles.inputFocused,
+                        ]}
+                        placeholder="Kundenavn"
+                        placeholderTextColor={Colors.textMuted}
+                        value={kundeNavn}
+                        onChangeText={setKundeNavn}
+                        autoCapitalize="words"
+                        returnKeyType="next"
+                        blurOnSubmit={false}
+                        onSubmitEditing={() => telefonRef.current?.focus()}
+                        onFocus={() => setFokusertFelt('kundenavn')}
+                        onBlur={() => setFokusertFelt(null)}
                       />
-                      <ScrollWheelPicker
-                        label="TIMER"
-                        value={timer}
-                        onChange={setTimer}
-                        values={TIMER_VERDIER}
-                        suffix="t"
-                      />
-                      <ScrollWheelPicker
-                        label="MATERIALE"
-                        value={materiale}
-                        onChange={setMateriale}
-                        values={MATERIALE_VERDIER}
-                        suffix="kr"
+
+                      <TextInput
+                        ref={telefonRef}
+                        style={[
+                          styles.input,
+                          styles.kundeTelefonInput,
+                          fokusertFelt === 'telefon' && styles.inputFocused,
+                        ]}
+                        placeholder="Telefon"
+                        placeholderTextColor={Colors.textMuted}
+                        value={kundeTelefon}
+                        onChangeText={setKundeTelefon}
+                        keyboardType="phone-pad"
+                        textContentType="telephoneNumber"
+                        autoCapitalize="none"
+                        onFocus={() => setFokusertFelt('telefon')}
+                        onBlur={() => setFokusertFelt(null)}
                       />
                     </View>
-                  </View>
 
-                  {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
-                </View>
-              </ScrollView>
-
-              <View
-                style={[
-                  styles.fixedFooter,
-                  styles.bottomDock,
-                  { paddingBottom: fixedBottomPadding },
-                ]}
-              >
-                <TouchableOpacity
-                  style={[styles.genererKnapp, isGenerating && styles.genererKnappLoading]}
-                  onPress={generer}
-                  disabled={isGenerating}
-                  activeOpacity={0.85}
-                >
-                  {isGenerating ? (
-                    <>
-                      <ActivityIndicator color="#fff" size="small" />
-                      <Text style={styles.genererTekst}>Genererer...</Text>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.genererTekst}>Generer tilbud</Text>
-                      <Ionicons
-                        name="arrow-forward-outline"
-                        size={16}
-                        color="#fff"
-                        style={{ marginLeft: 6 }}
-                      />
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
-          {isLoadingState && (
-            <View style={styles.screen}>
-              <ScrollView
-                ref={scrollRef}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-                scrollEnabled={false}
-                contentContainerStyle={[
-                  styles.generatedContent,
-                  { paddingBottom: 108 + fixedBottomPadding },
-                ]}
-              >
-                <View style={styles.generatedMain}>
-                  <View style={styles.oppsummeringsBoks}>
-                    <OppsummeringsRad label="Kunde" verdi={kundeNavn} />
-                    <OppsummeringsRad label="Jobb" verdi={jobbBeskrivelse} truncate />
-                    <OppsummeringsRad
-                      label="Estimert"
-                      verdi={`kr ${estimertPris.toLocaleString('nb-NO')}`}
+                    <TextInput
+                      ref={epostRef}
+                      style={[
+                        styles.input,
+                        { marginTop: 8 },
+                        fokusertFelt === 'epost' && styles.inputFocused,
+                      ]}
+                      placeholder="Kunde e-post"
+                      placeholderTextColor={Colors.textMuted}
+                      value={kundeEpost}
+                      onChangeText={setKundeEpost}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => beskrivelseRef.current?.focus()}
+                      onFocus={() => setFokusertFelt('epost')}
+                      onBlur={() => setFokusertFelt(null)}
                     />
-                    <View style={styles.oppsummeringsDivider} />
-                    <TouchableOpacity
-                      style={styles.redigerKnapp}
-                      onPress={tilbakeTilSkjemaFraBeskrivelse}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.redigerTekst}>Juster utgangspunkt</Text>
-                    </TouchableOpacity>
-                  </View>
 
-                  <Text style={[styles.seksjonLabel, { marginTop: 24 }]}>FORHÅNDSVISNING</Text>
+                    <Text style={[styles.seksjonLabel, { marginTop: 24 }]}>JOBBEN</Text>
 
-                  <View style={styles.loadingStage}>
-                    <SkeletonLoader style={styles.loadingSkeleton} />
-                  </View>
-                </View>
-              </ScrollView>
-
-              <View
-                style={[
-                  styles.fixedFooter,
-                  styles.bottomDock,
-                  { paddingBottom: fixedBottomPadding },
-                ]}
-              >
-                <TouchableOpacity
-                  style={[styles.sendKnappFull, styles.knappDisabled]}
-                  disabled
-                  activeOpacity={1}
-                >
-                  <Ionicons name="send" size={16} color="#fff" />
-                  <Text style={styles.sendTekst}>Send til kunde</Text>
-                </TouchableOpacity>
-                {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
-              </View>
-            </View>
-          )}
-
-          {isGeneratedState && (
-            <View style={styles.screen}>
-              <ScrollView
-                ref={scrollRef}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={[
-                  styles.generatedContent,
-                  { paddingBottom: 120 + fixedBottomPadding },
-                ]}
-              >
-                <View style={styles.generatedMain}>
-                  <View style={styles.oppsummeringsBoks}>
-                    <OppsummeringsRad label="Kunde" verdi={kundeNavn} />
-                    <OppsummeringsRad label="Jobb" verdi={jobbBeskrivelse} truncate />
-                    <OppsummeringsRad
-                      label="Estimert"
-                      verdi={`kr ${estimertPris.toLocaleString('nb-NO')}`}
+                    <TextInput
+                      ref={beskrivelseRef}
+                      style={[
+                        styles.multilineInput,
+                        fokusertFelt === 'beskrivelse' && styles.multilineInputFocused,
+                      ]}
+                      placeholder={'F.eks: Bytte varmtvannsbereder i bad.\nInkludere røropplegg til oppvaskmaskin.'}
+                      placeholderTextColor={Colors.textMuted}
+                      value={jobbBeskrivelse}
+                      onChangeText={setJobbBeskrivelse}
+                      multiline
+                      textAlignVertical="top"
+                      returnKeyType="done"
+                      blurOnSubmit
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      onFocus={håndterBeskrivelseFocus}
+                      onBlur={() => setFokusertFelt(null)}
                     />
-                    <View style={styles.oppsummeringsDivider} />
-                    <TouchableOpacity
-                      style={styles.redigerKnapp}
-                      onPress={tilbakeTilSkjemaFraBeskrivelse}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.redigerTekst}>Juster utgangspunkt</Text>
-                    </TouchableOpacity>
-                  </View>
 
-                  <Text style={[styles.seksjonLabel, { marginTop: 24 }]}>FORHÅNDSVISNING</Text>
+                    <Text style={[styles.seksjonLabel, { marginTop: 28 }]}>TYPE JOBB</Text>
 
-                  <View style={styles.fvBoks}>
-                    {redigerModus ? (
-                      <>
-                        <View style={styles.fvRedigerHeader}>
-                          <Text style={styles.fvRedigerLabel}>Redigerer tilbudstekst</Text>
-                          <TouchableOpacity onPress={lagreRedigering} activeOpacity={0.7}>
-                            <Text style={styles.fvFerdigTekst}>Ferdig</Text>
+                    <View style={styles.typeGrid}>
+                      {JOBBTYPER.map(type => {
+                        const aktiv = aktivJobbtype === type
+                        return (
+                          <TouchableOpacity
+                            key={type}
+                            style={[styles.typeOption, aktiv && styles.typeOptionAktiv]}
+                            onPress={() => {
+                              setAktivJobbtype(prev => (prev === type ? '' : type))
+                              Keyboard.dismiss()
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <View style={[styles.typeRadio, aktiv && styles.typeRadioAktiv]}>
+                              {aktiv ? <View style={styles.typeRadioInner} /> : null}
+                            </View>
+                            <Text style={[styles.typeOptionTekst, aktiv && styles.typeOptionTekstAktiv]}>
+                              {type}
+                            </Text>
                           </TouchableOpacity>
-                        </View>
+                        )
+                      })}
+                    </View>
 
-                        <TextInput
-                          style={styles.redigerInput}
-                          value={redigerbarTekst}
-                          onChangeText={setRedigerbarTekst}
-                          multiline
-                          textAlignVertical="top"
-                          scrollEnabled
+                    <View style={styles.hjulSection}>
+                      <View style={styles.hjulRad}>
+                        <ScrollWheelPicker
+                          label="ESTIMERT PRIS"
+                          value={estimertPris}
+                          onChange={setEstimertPris}
+                          values={PRIS_VERDIER}
+                          suffix="kr"
                         />
+                        <ScrollWheelPicker
+                          label="TIMER"
+                          value={timer}
+                          onChange={setTimer}
+                          values={TIMER_VERDIER}
+                          suffix="t"
+                        />
+                        <ScrollWheelPicker
+                          label="MATERIALE"
+                          value={materiale}
+                          onChange={setMateriale}
+                          values={MATERIALE_VERDIER}
+                          suffix="kr"
+                        />
+                      </View>
+                    </View>
+
+                    {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
+                  </View>
+                </View>
+
+                <View
+                  style={[
+                    styles.fixedFooter,
+                    styles.bottomDock,
+                    { paddingBottom: fixedBottomPadding },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[styles.genererKnapp, isGenerating && styles.genererKnappLoading]}
+                    onPress={generer}
+                    disabled={isGenerating}
+                    activeOpacity={0.85}
+                  >
+                    {isGenerating ? (
+                      <>
+                        <ActivityIndicator color="#fff" size="small" />
+                        <Text style={styles.genererTekst}>Genererer...</Text>
                       </>
                     ) : (
                       <>
-                        <TouchableOpacity
-                          style={styles.redigerIkonRad}
-                          onPress={aktiverRedigering}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="pencil-outline" size={14} color="#9CA3AF" />
-                          <Text style={styles.redigerIkonTekst}>Rediger manuelt</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity onPress={aktiverRedigering} activeOpacity={0.95}>
-                          <TilbudsForhåndsvisning tekst={generertTekst} />
-                        </TouchableOpacity>
+                        <Text style={styles.genererTekst}>Generer tilbud</Text>
+                        <Ionicons
+                          name="arrow-forward-outline"
+                          size={16}
+                          color="#fff"
+                          style={{ marginLeft: 6 }}
+                        />
                       </>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 </View>
-              </ScrollView>
-
-              <View
-                style={[
-                  styles.fixedFooter,
-                  styles.bottomDock,
-                  { paddingBottom: fixedBottomPadding },
-                ]}
-              >
-                <TouchableOpacity
-                  style={[styles.sendKnappFull, (!kanSende || sender) && styles.knappDisabled]}
-                  onPress={sendTilKunde}
-                  disabled={!kanSende}
-                  activeOpacity={0.85}
-                >
-                  {sender ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <>
-                      <Ionicons name="send" size={16} color="#fff" />
-                      <Text style={styles.sendTekst}>Send til kunde</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-                {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
               </View>
-            </View>
-          )}
-        </View>
-      </SafeAreaView>
+            )}
+
+            {isLoadingState && (
+              <View style={styles.screen}>
+                <ScrollView
+                  ref={scrollRef}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  scrollEnabled={false}
+                  contentContainerStyle={[
+                    styles.generatedContent,
+                    { paddingBottom: 108 + fixedBottomPadding },
+                  ]}
+                >
+                  <View style={styles.generatedMain}>
+                    <View style={styles.oppsummeringsBoks}>
+                      <OppsummeringsRad label="Kunde" verdi={kundeNavn} />
+                      {kundeTelefon.trim() ? (
+                        <OppsummeringsRad label="Telefon" verdi={kundeTelefon.trim()} />
+                      ) : null}
+                      <OppsummeringsRad label="Jobb" verdi={jobbBeskrivelse} truncate />
+                      <OppsummeringsRad
+                        label="Estimert"
+                        verdi={`kr ${estimertPris.toLocaleString('nb-NO')}`}
+                      />
+                    </View>
+
+                    <Text style={[styles.seksjonLabel, { marginTop: 24 }]}>FORHÅNDSVISNING</Text>
+
+                    <View style={styles.loadingStage}>
+                      <SkeletonLoader style={styles.loadingSkeleton} />
+                    </View>
+                  </View>
+                </ScrollView>
+
+                <View
+                  style={[
+                    styles.fixedFooter,
+                    styles.bottomDock,
+                    { paddingBottom: fixedBottomPadding },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[styles.sendKnappFull, styles.knappDisabled]}
+                    disabled
+                    activeOpacity={1}
+                  >
+                    <Ionicons name="send" size={16} color="#fff" />
+                    <Text style={styles.sendTekst}>Send til kunde</Text>
+                  </TouchableOpacity>
+                  {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
+                </View>
+              </View>
+            )}
+
+            {isGeneratedState && (
+              <View style={styles.screen}>
+                <ScrollView
+                  ref={scrollRef}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={[
+                    styles.generatedContent,
+                    styles.generatedContentCompact,
+                    { paddingBottom: 88 + fixedBottomPadding },
+                  ]}
+                >
+                  <View style={styles.generatedMainCompact}>
+                    <View style={styles.oppsummeringsBoks}>
+                      <OppsummeringsRad label="Kunde" verdi={kundeNavn} />
+                      {kundeTelefon.trim() ? (
+                        <OppsummeringsRad label="Telefon" verdi={kundeTelefon.trim()} />
+                      ) : null}
+                      <OppsummeringsRad label="Jobb" verdi={jobbBeskrivelse} truncate />
+                      <OppsummeringsRad
+                        label="Estimert"
+                        verdi={`kr ${estimertPris.toLocaleString('nb-NO')}`}
+                      />
+                    </View>
+
+                    <Text style={[styles.seksjonLabel, { marginTop: 14 }]}>FORHÅNDSVISNING</Text>
+
+                    <View style={styles.fvBoks}>
+                      {redigerModus ? (
+                        <>
+                          <View style={styles.fvRedigerHeader}>
+                            <Text style={styles.fvRedigerLabel}>Redigerer tilbudstekst</Text>
+                            <TouchableOpacity onPress={lagreRedigering} activeOpacity={0.7}>
+                              <Text style={styles.fvFerdigTekst}>Ferdig</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          <TextInput
+                            style={styles.redigerInput}
+                            value={redigerbarTekst}
+                            onChangeText={setRedigerbarTekst}
+                            multiline
+                            textAlignVertical="top"
+                            scrollEnabled
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <TouchableOpacity
+                            style={styles.redigerIkonRad}
+                            onPress={aktiverRedigering}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="pencil-outline" size={14} color="#9CA3AF" />
+                            <Text style={styles.redigerIkonTekst}>Rediger manuelt</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity onPress={aktiverRedigering} activeOpacity={0.95}>
+                            <TilbudsForhåndsvisning tekst={generertTekst} />
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+
+                    <View style={styles.oppsummeringsDivider} />
+                    <TouchableOpacity
+                      style={styles.redigerKnapp}
+                      onPress={tilbakeTilSkjemaFraBeskrivelse}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.redigerTekst}>Juster utgangspunkt</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+
+                <View
+                  style={[
+                    styles.fixedFooter,
+                    styles.bottomDock,
+                    { paddingBottom: fixedBottomPadding },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[styles.sendKnappFull, (!kanSende || sender) && styles.knappDisabled]}
+                    onPress={sendTilKunde}
+                    disabled={!kanSende}
+                    activeOpacity={0.85}
+                  >
+                    {sender ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <>
+                        <Ionicons name="send" size={16} color="#fff" />
+                        <Text style={styles.sendTekst}>Send til kunde</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
+                </View>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </TouchableWithoutFeedback>
     </Modal>
   )
 }
@@ -729,6 +746,19 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     marginBottom: 8,
     textTransform: 'uppercase',
+  },
+
+  kundeRad: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+
+  kundeNavnInput: {
+    flex: 1,
+  },
+
+  kundeTelefonInput: {
+    flex: 1,
   },
 
   input: {
@@ -859,6 +889,10 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
+  formContent: {
+    flex: 1,
+  },
+
   generatedContent: {
     paddingHorizontal: 20,
     paddingTop: 20,
@@ -866,9 +900,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
 
+  generatedContentCompact: {
+    flexGrow: 0,
+  },
+
   generatedMain: {
     flexGrow: 1,
   },
+
+  generatedMainCompact: {},
 
   loadingStage: {
     flex: 1,

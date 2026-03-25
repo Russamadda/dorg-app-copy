@@ -14,18 +14,18 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-// ─── Rad-typer som matcher Supabase-tabellene fra rssa-tilbud ───────────────
-
 type TilbudRad = {
   id: string
   firma_id: string | null
   kunde_navn: string
   kunde_epost: string
+  kunde_telefon?: string | null
   jobb_beskrivelse: string
   pris_eks_mva: number
   status: string | null
   opprettet_dato: string
   generert_tekst: string | null
+  antall_paminnelser?: number | null
 }
 
 type FirmaRad = {
@@ -52,19 +52,19 @@ type PrishistorikkRad = {
   dato: string
 }
 
-// ─── Mapping-funksjoner ──────────────────────────────────────────────────────
-
 function fraForespørselRad(rad: TilbudRad): Forespørsel {
   return {
     id: rad.id,
     kundeNavn: rad.kunde_navn,
     kundeEpost: rad.kunde_epost,
+    kundeTelefon: rad.kunde_telefon ?? undefined,
     jobbBeskrivelse: rad.jobb_beskrivelse,
     prisEksMva: Number(rad.pris_eks_mva),
     status: (rad.status as Forespørsel['status']) ?? 'avventer',
     opprettetDato: rad.opprettet_dato,
     generertTekst: rad.generert_tekst ?? undefined,
     firmaId: rad.firma_id ?? '',
+    antallPaminnelser: rad.antall_paminnelser ?? 0,
   }
 }
 
@@ -96,7 +96,9 @@ function fraPrishistorikkRad(rad: PrishistorikkRad): Prishistorikk {
   }
 }
 
-// ─── Forespørsler ────────────────────────────────────────────────────────────
+function erManglendeKolonneFeil(error: { code?: string; message?: string } | null, kolonne: string) {
+  return error?.code === 'PGRST204' && error.message?.includes(`'${kolonne}'`) === true
+}
 
 export async function hentForespørsler(firmaId: string): Promise<Forespørsel[]> {
   const { data, error } = await supabase
@@ -131,7 +133,9 @@ export async function lagreForespørsel(
   const gyldigTilDato = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
     .toISOString().split('T')[0]
 
-  const insertData = {
+  const telefon = data.kundeTelefon?.trim()
+
+  const baseInsertData = {
     firma_id: data.firmaId,
     kunde_navn: data.kundeNavn,
     kunde_epost: data.kundeEpost,
@@ -146,13 +150,30 @@ export async function lagreForespørsel(
     firmanavn: (firmaData as { firmanavn: string } | null)?.firmanavn ?? '',
   }
 
+  const insertData = telefon
+    ? {
+        ...baseInsertData,
+        kunde_telefon: telefon,
+      }
+    : baseInsertData
+
   console.log('[supabase] lagreForespørsel insert:', JSON.stringify(insertData, null, 2))
 
-  const { data: inserted, error } = await supabase
+  let { data: inserted, error } = await supabase
     .from('tilbud')
     .insert(insertData)
     .select()
     .single()
+
+  if (erManglendeKolonneFeil(error, 'kunde_telefon')) {
+    console.warn('[supabase] kunde_telefon mangler i schema cache, prøver uten telefonfelt')
+
+    ;({ data: inserted, error } = await supabase
+      .from('tilbud')
+      .insert(baseInsertData)
+      .select()
+      .single())
+  }
 
   console.log('Insert result - data:', JSON.stringify(inserted, null, 2))
   console.log('Insert result - error:', JSON.stringify(error, null, 2))
@@ -161,6 +182,7 @@ export async function lagreForespørsel(
     console.error('[supabase] insert error:', error)
     throw error
   }
+
   return fraForespørselRad(inserted as TilbudRad)
 }
 
@@ -171,28 +193,59 @@ export async function oppdaterForespørsel(
   const update: Record<string, unknown> = {}
   if (data.kundeNavn !== undefined) update.kunde_navn = data.kundeNavn
   if (data.kundeEpost !== undefined) update.kunde_epost = data.kundeEpost
+  if (data.kundeTelefon !== undefined) update.kunde_telefon = data.kundeTelefon
   if (data.jobbBeskrivelse !== undefined) update.jobb_beskrivelse = data.jobbBeskrivelse
   if (data.prisEksMva !== undefined) update.pris_eks_mva = data.prisEksMva
   if (data.status !== undefined) update.status = data.status
   if (data.generertTekst !== undefined) update.generert_tekst = data.generertTekst
 
-  const { error } = await supabase.from('tilbud').update(update).eq('id', id)
+  let { error } = await supabase.from('tilbud').update(update).eq('id', id)
+
+  if (erManglendeKolonneFeil(error, 'kunde_telefon')) {
+    delete update.kunde_telefon
+    ;({ error } = await supabase.from('tilbud').update(update).eq('id', id))
+  }
+
   if (error) throw new Error(error.message)
 }
 
 export async function hentSendteTilbud(firmaId: string): Promise<Forespørsel[]> {
   const { data, error } = await supabase
     .from('tilbud')
-    .select('*')
+    .select('*, firma:firma_id(firmanavn)')
     .eq('firma_id', firmaId)
-    .neq('status', 'avventer')
     .order('opprettet_dato', { ascending: false })
 
   if (error) throw new Error(error.message)
   return (data as TilbudRad[]).map(fraForespørselRad)
 }
 
-// ─── Firma ───────────────────────────────────────────────────────────────────
+export async function oppdaterTilbudStatus(
+  id: string,
+  status: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('tilbud')
+    .update({ status })
+    .eq('id', id)
+
+  if (error) {
+    console.error('Feil ved statusoppdatering:', error)
+    throw error
+  }
+}
+
+export async function slettTilbud(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('tilbud')
+    .delete()
+    .eq('id', id)
+
+  if (error) {
+    console.error('Feil ved sletting av tilbud:', error)
+    throw error
+  }
+}
 
 export async function hentFirma(userId: string): Promise<Firma | null> {
   const { data, error } = await supabase
@@ -230,8 +283,6 @@ export async function opprettFirma(userId: string, firmanavn: string): Promise<v
   if (error) throw new Error(error.message)
 }
 
-// ─── Prishistorikk ───────────────────────────────────────────────────────────
-
 export async function hentPrishistorikk(firmaId: string): Promise<Prishistorikk[]> {
   const { data, error } = await supabase
     .from('prishistorikk')
@@ -242,8 +293,6 @@ export async function hentPrishistorikk(firmaId: string): Promise<Prishistorikk[
   if (error) throw new Error(error.message)
   return (data as PrishistorikkRad[]).map(fraPrishistorikkRad)
 }
-
-// ─── Logo-opplasting ─────────────────────────────────────────────────────────
 
 export async function lastOppLogo(
   uri: string,
@@ -283,9 +332,6 @@ export async function lastOppLogo(
 
   return publicUrl
 }
-
-
-// ─── Auth ────────────────────────────────────────────────────────────────────
 
 export async function loggUt(): Promise<void> {
   await supabase.auth.signOut()

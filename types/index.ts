@@ -1,14 +1,16 @@
-export interface Forespørsel {
+﻿export interface Forespørsel {
   id: string
   kundeNavn: string
   kundeEpost: string
+  kundeTelefon?: string
   jobbBeskrivelse: string
   prisEksMva: number
-  status: 'avventer' | 'sendt' | 'godkjent' | 'avslatt'
+  status: 'avventer' | 'sendt' | 'paminnelse' | 'siste' | 'godkjent' | 'avslatt'
   opprettetDato: string
   generertTekst?: string
   firmaId: string
   jobbType?: string
+  antallPaminnelser?: number
 }
 
 export interface Firma {

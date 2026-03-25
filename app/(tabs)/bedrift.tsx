@@ -106,7 +106,7 @@ export default function BedriftScreen() {
 
   if (laster) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={[]}>
         <TopBar />
         <ActivityIndicator color={Colors.accent} style={{ marginTop: 60 }} size="large" />
       </SafeAreaView>
@@ -114,7 +114,7 @@ export default function BedriftScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={[]}>
       <TopBar />
       <ToastMessage
         message={toast.message}

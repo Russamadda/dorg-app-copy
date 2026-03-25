@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import {
@@ -10,14 +10,18 @@ import {
 import {
   DMSerifDisplay_400Regular,
 } from '@expo-google-fonts/dm-serif-display'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 
-SplashScreen.preventAutoHideAsync()
+void SplashScreen.preventAutoHideAsync().catch(() => {
+  // This can already be handled by Expo during fast refresh / dev reloads.
+})
 
 export default function RootLayout() {
   const router = useRouter()
   const segments = useSegments()
+  const splashHiddenRef = useRef(false)
   const [fontsLoaded, fontError] = useFonts({
     DMSans_400Regular,
     DMSans_500Medium,
@@ -27,8 +31,11 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
 
   useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync()
+    if ((fontsLoaded || fontError) && !splashHiddenRef.current) {
+      splashHiddenRef.current = true
+      void SplashScreen.hideAsync().catch(() => {
+        // Ignore "No native splash screen registered" during dev reload edge cases.
+      })
     }
   }, [fontsLoaded, fontError])
 
@@ -68,10 +75,12 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-      <Stack.Screen name="auth" />
-      <Stack.Screen name="(tabs)" />
-    </Stack>
+    <GestureHandlerRootView style={{ flex: 1, overflow: 'visible' }}>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth" />
+        <Stack.Screen name="(tabs)" />
+      </Stack>
+    </GestureHandlerRootView>
   )
 }
