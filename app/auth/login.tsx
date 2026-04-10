@@ -13,6 +13,7 @@ import {
 import { Link } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { normaliserEpost, oversettAuthFeil } from '../../lib/auth'
 import { supabase } from '../../lib/supabase'
 import { Colors } from '../../constants/colors'
 
@@ -31,10 +32,14 @@ export default function LoginScreen() {
     setLaster(true)
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email: epost.trim(),
+        email: normaliserEpost(epost),
         password: passord,
       })
-      if (error) setFeil(error.message)
+      if (error) {
+        setFeil(oversettAuthFeil(error.message))
+      }
+    } catch (error) {
+      setFeil(oversettAuthFeil(error instanceof Error ? error.message : null))
     } finally {
       setLaster(false)
     }
@@ -82,6 +87,14 @@ export default function LoginScreen() {
                 secureTextEntry
                 autoCapitalize="none"
               />
+            </View>
+
+            <View style={styles.glemtPassordRad}>
+              <Link href="/auth/forgot-password" asChild>
+                <TouchableOpacity>
+                  <Text style={styles.glemtPassordLenke}>Glemt passord?</Text>
+                </TouchableOpacity>
+              </Link>
             </View>
 
             {feil ? <Text style={styles.feil}>{feil}</Text> : null}
@@ -171,6 +184,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.danger,
     textAlign: 'center',
+  },
+  glemtPassordRad: {
+    alignItems: 'flex-end',
+    marginTop: -4,
+  },
+  glemtPassordLenke: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    color: Colors.primary,
+    textDecorationLine: 'underline',
   },
   knapp: {
     height: 48,

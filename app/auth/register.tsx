@@ -13,6 +13,7 @@ import {
 import { Link } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { normaliserEpost, oversettAuthFeil } from '../../lib/auth'
 import { supabase, opprettFirma } from '../../lib/supabase'
 import { Colors } from '../../constants/colors'
 
@@ -22,6 +23,7 @@ export default function RegisterScreen() {
   const [passord, setPassord] = useState('')
   const [bekreftPassord, setBekreftPassord] = useState('')
   const [feil, setFeil] = useState('')
+  const [info, setInfo] = useState('')
   const [laster, setLaster] = useState(false)
 
   async function registrer() {
@@ -39,19 +41,25 @@ export default function RegisterScreen() {
     }
 
     setFeil('')
+    setInfo('')
     setLaster(true)
     try {
       const { data, error } = await supabase.auth.signUp({
-        email: epost.trim(),
+        email: normaliserEpost(epost),
         password: passord,
       })
       if (error) {
-        setFeil(error.message)
+        setFeil(oversettAuthFeil(error.message))
         return
       }
       if (data.user) {
         await opprettFirma(data.user.id, firmanavn.trim())
       }
+      if (!data.session) {
+        setInfo('Konto opprettet. Bekreft e-posten før du logger inn.')
+      }
+    } catch (error) {
+      setFeil(oversettAuthFeil(error instanceof Error ? error.message : null))
     } finally {
       setLaster(false)
     }
@@ -126,6 +134,7 @@ export default function RegisterScreen() {
               />
             </View>
 
+            {info ? <Text style={styles.info}>{info}</Text> : null}
             {feil ? <Text style={styles.feil}>{feil}</Text> : null}
 
             <TouchableOpacity
@@ -213,6 +222,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.danger,
     textAlign: 'center',
+  },
+  info: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: Colors.infoText,
+    textAlign: 'center',
+    backgroundColor: Colors.infoBackground,
+    borderWidth: 1,
+    borderColor: Colors.infoBorder,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   knapp: {
     height: 48,

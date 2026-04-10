@@ -1,31 +1,146 @@
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
+import { fjernKortLinje } from '../lib/tekstUtils'
 
 interface Props {
   tekst: string
+  isLoading?: boolean
+  tone?: 'light' | 'dark'
+  /** Løsere rytme og typografi for tilbudskort i mørk modus (kun layout/stil). */
+  documentVariant?: boolean
 }
 
-export function TilbudsForhåndsvisning({ tekst }: Props) {
-  const linjer = tekst.split('\n')
+const META_PREFIXES = ['Til:', 'Fra:', 'Dato:', 'Adresse:', 'Tlf:', 'E-post:']
+const SEKSJONSTITLER = [
+  'Oppstart:',
+  'Gyldighet:',
+  'Pris:',
+  'Dette er inkludert:',
+  'Viktig å merke seg:',
+]
+
+function parseMetaLinje(linje: string) {
+  const prefix = META_PREFIXES.find(item => linje.startsWith(item))
+  if (!prefix) {
+    return null
+  }
+
+  return {
+    label: prefix.slice(0, -1),
+    verdi: linje.slice(prefix.length).trim(),
+  }
+}
+
+function erSeparatorLinje(linje: string) {
+  return /^[─-]{5,}$/.test(linje)
+}
+
+export function TilbudsForhåndsvisning({
+  tekst,
+  isLoading = false,
+  tone = 'light',
+  documentVariant = false,
+}: Props) {
+  const erMork = tone === 'dark'
+  const doc = documentVariant && erMork
+
+  if (isLoading) {
+    return (
+      <View style={[styles.container, doc && styles.containerDoc]}>
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonTittel]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonKort]} />
+        <View style={[styles.tomLinje, doc && styles.tomLinjeDoc]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonMeta]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonMetaKort]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonMetaKort]} />
+        <View style={[styles.divider, erMork && styles.dividerMork, doc && styles.dividerMorkDoc]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonBrod]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonBrod]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonBrodKort]} />
+        <View style={[styles.tomLinje, doc && styles.tomLinjeDoc]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonBrod]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonBrodKort]} />
+        <View style={[styles.divider, erMork && styles.dividerMork, doc && styles.dividerMorkDoc]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonPris]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonPris]} />
+        <View style={[styles.skeletonLinje, erMork && styles.skeletonLinjeMork, styles.skeletonPrisTotal]} />
+      </View>
+    )
+  }
+
+  const linjer = fjernKortLinje(tekst).split('\n')
   const elements: React.ReactNode[] = []
   let key = 0
 
   for (let i = 0; i < linjer.length; i++) {
     const linje = linjer[i].trim()
+    const nesteLinje = linjer[i + 1]?.trim() ?? ''
+    const nesteIkkeTomLinje = linjer.slice(i + 1).find(item => item.trim())?.trim() ?? ''
+    const forrigeLinje = linjer[i - 1]?.trim() ?? ''
 
     if (!linje) {
-      elements.push(<View key={key++} style={styles.tomLinje} />)
+      const nesteErTotalPris =
+        nesteLinje.includes('kr') &&
+        nesteLinje.includes(':') &&
+        nesteLinje.toLowerCase().includes('totalt')
+      const nesteErAdresseEtterFra =
+        !nesteLinje.includes(':') &&
+        ['Tlf:', 'E-post:', 'Dato:'].some(prefix =>
+          nesteIkkeTomLinje.startsWith(prefix)
+        )
+
+      if (nesteErTotalPris) {
+        continue
+      }
+
+      elements.push(
+        <View
+          key={key++}
+          style={nesteErAdresseEtterFra ? styles.metaMellomrom : [styles.tomLinje, doc && styles.tomLinjeDoc]}
+        />
+      )
       continue
     }
 
     if (linje === '---') {
-      elements.push(<View key={key++} style={styles.divider} />)
+      const nesteErPrisSeksjon = nesteIkkeTomLinje === 'Pris:'
+      if (nesteErPrisSeksjon) {
+        continue
+      }
+
+      elements.push(
+        <View
+          key={key++}
+          style={[styles.divider, erMork && styles.dividerMork, doc && styles.dividerMorkDoc]}
+        />
+      )
+      continue
+    }
+
+    if (erSeparatorLinje(linje)) {
       continue
     }
 
     if (i === 0) {
       elements.push(
-        <Text key={key++} style={styles.tittel}>{linje}</Text>
+        <Text
+          key={key++}
+          style={[styles.tittel, erMork && styles.tittelMork, doc && styles.tittelMorkDoc]}
+        >
+          {linje}
+        </Text>
+      )
+      continue
+    }
+
+    if (SEKSJONSTITLER.includes(linje)) {
+      elements.push(
+        <Text
+          key={key++}
+          style={[styles.seksjonstittel, erMork && styles.seksjonstittelMork, doc && styles.seksjonstittelMorkDoc]}
+        >
+          {linje}
+        </Text>
       )
       continue
     }
@@ -33,7 +148,10 @@ export function TilbudsForhåndsvisning({ tekst }: Props) {
     const erOverskrift = linje.endsWith(':') && linje.length < 30
     if (erOverskrift) {
       elements.push(
-        <Text key={key++} style={styles.overskrift}>
+        <Text
+          key={key++}
+          style={[styles.overskrift, erMork && styles.overskriftMork, doc && styles.overskriftMorkDoc]}
+        >
           {linje.slice(0, -1)}
         </Text>
       )
@@ -48,20 +166,41 @@ export function TilbudsForhåndsvisning({ tekst }: Props) {
         const label = innhold.slice(0, kolonPos)
         const verdi = innhold.slice(kolonPos + 1).trim()
         elements.push(
-          <View key={key++} style={styles.bulletRad}>
-            <Text style={styles.bulletPunkt}>·</Text>
-            <Text style={styles.bulletLabel}>{label}: </Text>
-            <Text style={styles.bulletVerdi}>{verdi}</Text>
+          <View key={key++} style={[styles.bulletRad, doc && styles.bulletRadDoc]}>
+            <Text style={[styles.bulletPunkt, erMork && styles.bulletPunktMork]}>·</Text>
+            <Text style={styles.bulletInnhold}>
+              <Text style={[styles.bulletLabel, erMork && styles.bulletLabelMork]}>{label}: </Text>
+              <Text
+                style={[styles.bulletVerdi, erMork && styles.bulletVerdiMork, doc && styles.bulletVerdiMorkDoc]}
+              >
+                {verdi}
+              </Text>
+            </Text>
           </View>
         )
       } else {
         elements.push(
-          <View key={key++} style={styles.bulletRad}>
-            <Text style={styles.bulletPunkt}>·</Text>
-            <Text style={styles.bulletTekst}>{innhold}</Text>
+          <View key={key++} style={[styles.bulletRad, doc && styles.bulletRadDoc]}>
+            <Text style={[styles.bulletPunkt, erMork && styles.bulletPunktMork]}>·</Text>
+            <Text
+              style={[styles.bulletTekst, erMork && styles.bulletTekstMork, doc && styles.bulletTekstMorkDoc]}
+            >
+              {innhold}
+            </Text>
           </View>
         )
       }
+      continue
+    }
+
+    const meta = parseMetaLinje(linje)
+    if (meta) {
+      elements.push(
+        <View key={key++} style={styles.metaRad}>
+          <Text style={[styles.metaLabel, erMork && styles.metaLabelMork]}>{meta.label}:</Text>
+          <Text style={[styles.metaVerdi, erMork && styles.metaVerdiMork]}>{meta.verdi}</Text>
+        </View>
+      )
       continue
     }
 
@@ -71,12 +210,21 @@ export function TilbudsForhåndsvisning({ tekst }: Props) {
       const prisVerdi = deler.slice(1).join(':').trim()
       const erTotal = prisTekst.toLowerCase().includes('totalt')
 
+      if (erTotal) {
+        elements.push(
+          <View
+            key={key++}
+            style={[styles.divider, erMork && styles.dividerMork, doc && styles.dividerMorkDoc]}
+          />
+        )
+      }
+
       elements.push(
-        <View key={key++} style={styles.prisRad}>
-          <Text style={[styles.prisLabel, erTotal && styles.prisTotalLabel]}>
+        <View key={key++} style={[styles.prisRad, doc && styles.prisRadDoc]}>
+          <Text style={[styles.prisLabel, erMork && styles.prisLabelMork, erTotal && styles.prisTotalLabel, erTotal && erMork && styles.prisTotalLabelMork]}>
             {prisTekst}
           </Text>
-          <Text style={[styles.prisVerdi, erTotal && styles.prisTotalVerdi]}>
+          <Text style={[styles.prisVerdi, erMork && styles.prisVerdiMork, erTotal && styles.prisTotalVerdi, erTotal && erMork && styles.prisTotalVerdiMork]}>
             {prisVerdi}
           </Text>
         </View>
@@ -84,43 +232,100 @@ export function TilbudsForhåndsvisning({ tekst }: Props) {
       continue
     }
 
-    const erMetaInfo = ['Til:', 'Fra:', 'Dato:', 'Adresse:', 'Tlf:', 'E-post:']
-      .some(prefix => linje.startsWith(prefix))
+    const erAdresseLinje =
+      !linje.includes(':') &&
+      (forrigeLinje.startsWith('Fra:') ||
+        (forrigeLinje === '' &&
+          ['Tlf:', 'E-post:', 'Dato:'].some(prefix =>
+            nesteIkkeTomLinje.startsWith(prefix)
+          )))
 
-    if (erMetaInfo) {
-      const kolonPos = linje.indexOf(':')
-      const label = linje.slice(0, kolonPos)
-      const verdi = linje.slice(kolonPos + 1).trim()
+    if (erAdresseLinje) {
       elements.push(
         <View key={key++} style={styles.metaRad}>
-          <Text style={styles.metaLabel}>{label}</Text>
-          <Text style={styles.metaVerdi}>{verdi}</Text>
+          <Text style={[styles.metaAdresseVerdi, erMork && styles.metaVerdiMork]}>{linje}</Text>
         </View>
       )
       continue
     }
 
     elements.push(
-      <Text key={key++} style={styles.brodtekst}>{linje}</Text>
+      <Text
+        key={key++}
+        style={[styles.brodtekst, erMork && styles.brodtekstMork, doc && styles.brodtekstMorkDoc]}
+      >
+        {linje}
+      </Text>
     )
   }
 
-  return <View style={styles.container}>{elements}</View>
+  return <View style={[styles.container, doc && styles.containerDoc]}>{elements}</View>
 }
 
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 4,
   },
+  containerDoc: {
+    paddingHorizontal: 6,
+  },
+  skeletonLinje: {
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#E5E7EB',
+    marginBottom: 8,
+  },
+  skeletonLinjeMork: {
+    backgroundColor: '#2B2B31',
+  },
+  skeletonTittel: {
+    height: 24,
+    width: '72%',
+  },
+  skeletonKort: {
+    width: '40%',
+  },
+  skeletonMeta: {
+    width: '55%',
+  },
+  skeletonMetaKort: {
+    width: '35%',
+  },
+  skeletonBrod: {
+    width: '100%',
+  },
+  skeletonBrodKort: {
+    width: '78%',
+  },
+  skeletonPris: {
+    width: '88%',
+  },
+  skeletonPrisTotal: {
+    height: 14,
+    width: '92%',
+  },
   tomLinje: {
     height: 10,
+  },
+  tomLinjeDoc: {
+    height: 12,
+  },
+  metaMellomrom: {
+    height: 8,
   },
   tittel: {
     fontSize: 20,
     fontFamily: 'DMSerifDisplay_400Regular',
     color: '#1B4332',
-    marginBottom: 16,
+    marginBottom: 8,
     lineHeight: 26,
+  },
+  tittelMork: {
+    color: '#8CC7A5',
+  },
+  tittelMorkDoc: {
+    marginBottom: 12,
+    lineHeight: 28,
   },
   overskrift: {
     fontSize: 15,
@@ -129,10 +334,38 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 6,
   },
+  overskriftMork: {
+    color: '#F5F7FA',
+  },
+  overskriftMorkDoc: {
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  seksjonstittel: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    color: '#111827',
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  seksjonstittelMork: {
+    color: '#F5F7FA',
+  },
+  seksjonstittelMorkDoc: {
+    marginTop: 20,
+    marginBottom: 6,
+  },
   divider: {
     height: 1,
     backgroundColor: '#E5E7EB',
-    marginVertical: 14,
+    marginVertical: 8,
+  },
+  dividerMork: {
+    backgroundColor: '#3A3B42',
+  },
+  dividerMorkDoc: {
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginVertical: 10,
   },
   brodtekst: {
     fontSize: 14,
@@ -141,11 +374,22 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 4,
   },
+  brodtekstMork: {
+    color: '#D6DBE3',
+  },
+  brodtekstMorkDoc: {
+    lineHeight: 24,
+    marginBottom: 5,
+  },
   bulletRad: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 5,
     paddingLeft: 4,
+    paddingRight: 4,
+  },
+  bulletRadDoc: {
+    marginBottom: 6,
   },
   bulletPunkt: {
     fontSize: 14,
@@ -154,11 +398,22 @@ const styles = StyleSheet.create({
     marginTop: 1,
     lineHeight: 20,
   },
+  bulletPunktMork: {
+    color: '#59D18C',
+  },
+  bulletInnhold: {
+    flex: 1,
+    flexShrink: 1,
+    lineHeight: 20,
+  },
   bulletLabel: {
     fontSize: 13,
     fontFamily: 'DMSans_500Medium',
     color: '#111827',
     lineHeight: 20,
+  },
+  bulletLabelMork: {
+    color: '#F5F7FA',
   },
   bulletVerdi: {
     fontSize: 13,
@@ -167,12 +422,25 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     flex: 1,
   },
+  bulletVerdiMork: {
+    color: '#D6DBE3',
+  },
+  bulletVerdiMorkDoc: {
+    color: '#E2E8F0',
+  },
   bulletTekst: {
     fontSize: 13,
     fontFamily: 'DMSans_400Regular',
     color: '#374151',
     lineHeight: 20,
     flex: 1,
+  },
+  bulletTekstMork: {
+    color: '#D6DBE3',
+  },
+  bulletTekstMorkDoc: {
+    color: '#E8EDF4',
+    lineHeight: 22,
   },
   metaRad: {
     flexDirection: 'row',
@@ -182,39 +450,72 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'DMSans_500Medium',
     color: '#374151',
-    width: 72,
+    marginRight: 6,
+  },
+  metaLabelMork: {
+    color: '#E5E7EB',
   },
   metaVerdi: {
     fontSize: 13,
     fontFamily: 'DMSans_400Regular',
     color: '#374151',
     flex: 1,
+    flexShrink: 1,
+  },
+  metaVerdiMork: {
+    color: '#D6DBE3',
+  },
+  metaAdresseVerdi: {
+    fontSize: 13,
+    fontFamily: 'DMSans_400Regular',
+    color: '#374151',
+    flex: 1,
+    flexShrink: 1,
   },
   prisRad: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    gap: 8,
+  },
+  prisRadDoc: {
+    paddingVertical: 5,
   },
   prisLabel: {
     fontSize: 13,
     fontFamily: 'DMSans_400Regular',
     color: '#6B7280',
+    flex: 1,
+    flexShrink: 1,
+    paddingRight: 8,
+  },
+  prisLabelMork: {
+    color: '#AEB6C2',
   },
   prisVerdi: {
     fontSize: 13,
     fontFamily: 'DMSans_500Medium',
     color: '#111827',
+    textAlign: 'right',
+  },
+  prisVerdiMork: {
+    color: '#F5F7FA',
   },
   prisTotalLabel: {
     fontSize: 14,
     fontFamily: 'DMSans_500Medium',
     color: '#111827',
   },
+  prisTotalLabelMork: {
+    color: '#F5F7FA',
+  },
   prisTotalVerdi: {
     fontSize: 15,
     fontFamily: 'DMSans_500Medium',
     color: '#1B4332',
+  },
+  prisTotalVerdiMork: {
+    color: '#8CC7A5',
   },
 })

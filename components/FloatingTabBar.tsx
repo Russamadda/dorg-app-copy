@@ -1,25 +1,31 @@
-import { useState } from 'react'
-import { LayoutChangeEvent, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
+import { useCallback, useEffect, useMemo, useState, memo } from 'react'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { MaterialIcons } from '@expo/vector-icons'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { BlurView } from 'expo-blur'
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs'
-import Svg, { Path } from 'react-native-svg'
-import {
-  GlassView,
-  isLiquidGlassAvailable,
-  isGlassEffectAPIAvailable,
-} from 'expo-glass-effect'
 import { fabEmitter } from '../lib/fabEmitter'
+import { useBadgeCount } from '../lib/notificationState'
+import { tabBarEmitter } from '../lib/tabBarEmitter'
+import NotificationBadge from './NotificationBadge'
 
-const ACTIVE_COLOR = '#2E7D53'
-const INACTIVE_COLOR = '#94A3B8'
-const FAB_SIZE = 56
-const PILL_RADIUS = 24
-const NOTCH_WIDTH = 80
-const NOTCH_DEPTH = 20
+const ACTIVE_COLOR = '#111111'
+const INACTIVE_COLOR = '#888888'
+const GLASS_FILL = 'rgba(255,255,255,0.14)'
+const GLASS_OVERLAY = 'rgba(255,255,255,0.18)'
+const GLASS_HIGHLIGHT = 'rgba(255,255,255,0.18)'
+const GLASS_EDGE = 'rgba(255,255,255,0.12)'
+const GLASS_BLUR_INTENSITY = 72
+const FAB_SIZE = 68
+const FAB_RING = 8
+const FAB_TOTAL_SIZE = FAB_SIZE + FAB_RING
+const FAB_LIFT = 18
 
 export function getFloatingTabBarPadding(bottomInset: number): number {
-  return Math.max(bottomInset, 4) + 96
+  return Math.max(bottomInset, 8) + 76 + FAB_LIFT + 10
+}
+
+export function getFloatingToastBottomOffset(): number {
+  return 76 + FAB_LIFT + 10
 }
 
 type SideTabProps = {
@@ -27,189 +33,141 @@ type SideTabProps = {
   icon: keyof typeof MaterialIcons.glyphMap
   label: string
   onPress: () => void
+  badgeVisible?: boolean
 }
 
-function SideTab({ active, icon, label, onPress }: SideTabProps) {
+const SideTab = memo(function SideTab({
+  active,
+  icon,
+  label,
+  onPress,
+  badgeVisible = false,
+}: SideTabProps) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.sideButton, pressed && styles.sideButtonPressed]}
       onPress={onPress}
+      style={({ pressed }) => [styles.tabButton, pressed && styles.tabButtonPressed]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
-      <MaterialIcons
-        name={icon}
-        size={24}
-        color={active ? ACTIVE_COLOR : INACTIVE_COLOR}
-      />
-      <Text style={[styles.sideLabel, active && styles.sideLabelActive]}>
+      <View style={styles.iconWrap}>
+        <MaterialIcons
+          name={icon}
+          size={24}
+          color={active ? ACTIVE_COLOR : INACTIVE_COLOR}
+        />
+        {badgeVisible ? <NotificationBadge visible /> : null}
+      </View>
+      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
         {label}
       </Text>
     </Pressable>
   )
-}
-
-function buildPillPath(width: number, height: number): string {
-  const radius = Math.min(PILL_RADIUS, height / 2)
-  const cx = width / 2
-  const notchStart = cx - NOTCH_WIDTH / 2
-  const notchEnd = cx + NOTCH_WIDTH / 2
-  const bottom = height
-  const right = width
-
-  return [
-    `M ${radius} 0`,
-    `L ${notchStart} 0`,
-    `C ${cx - 20} 0, ${cx - 16} ${NOTCH_DEPTH}, ${cx} ${NOTCH_DEPTH}`,
-    `C ${cx + 16} ${NOTCH_DEPTH}, ${cx + 20} 0, ${notchEnd} 0`,
-    `L ${right - radius} 0`,
-    `Q ${right} 0, ${right} ${radius}`,
-    `L ${right} ${bottom - radius}`,
-    `Q ${right} ${bottom}, ${right - radius} ${bottom}`,
-    `L ${radius} ${bottom}`,
-    `Q 0 ${bottom}, 0 ${bottom - radius}`,
-    `L 0 ${radius}`,
-    `Q 0 0, ${radius} 0`,
-    'Z',
-  ].join(' ')
-}
+})
 
 export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
-  const insets = useSafeAreaInsets()
-  const { width } = useWindowDimensions()
-  const barWidth = Math.min(width * 0.9, 340)
-  const bottomOffset = Math.max(insets.bottom, 4)
-  const [barHeight, setBarHeight] = useState(0)
+  const [tabBarVisible, setTabBarVisible] = useState(tabBarEmitter.getVisible())
+  const badgeCount = useBadgeCount()
 
-  const leftRouteIndex = state.routes.findIndex(route => route.name === 'index')
-  const rightRouteIndex = state.routes.findIndex(route => route.name === 'tilbud')
+  useEffect(() => {
+    return tabBarEmitter.on(setTabBarVisible)
+  }, [])
 
-  const canUseGlass = isLiquidGlassAvailable() && isGlassEffectAPIAvailable()
+  const leftRouteIndex = useMemo(
+    () => state.routes.findIndex(route => route.name === 'index'),
+    [state.routes]
+  )
+  const rightRouteIndex = useMemo(
+    () => state.routes.findIndex(route => route.name === 'tilbud'),
+    [state.routes]
+  )
 
-  function handleBarLayout(event: LayoutChangeEvent) {
-    setBarHeight(event.nativeEvent.layout.height)
-  }
+  const navigateTo = useCallback(
+    (routeIndex: number) => {
+      const route = state.routes[routeIndex]
+      if (!route) {
+        return
+      }
+      const event = navigation.emit({
+        type: 'tabPress',
+        target: route.key,
+        canPreventDefault: true,
+      })
+
+      if (!event.defaultPrevented) {
+        navigation.navigate(route.name as never)
+      }
+    },
+    [navigation, state.routes]
+  )
+
+  const onFabPress = useCallback(() => {
+    fabEmitter.emit()
+  }, [])
+
+  const onPressVenstre = useCallback(() => {
+    if (leftRouteIndex !== -1) {
+      navigateTo(leftRouteIndex)
+    }
+  }, [leftRouteIndex, navigateTo])
+
+  const onPressHøyre = useCallback(() => {
+    if (rightRouteIndex !== -1) {
+      navigateTo(rightRouteIndex)
+    }
+  }, [rightRouteIndex, navigateTo])
+
+  if (!tabBarVisible) return null
 
   return (
     <View style={styles.root} pointerEvents="box-none">
       <View
         style={[
           styles.wrapper,
-          { width: barWidth, bottom: bottomOffset, transform: [{ translateX: -(barWidth / 2) }] },
         ]}
       >
-        <View style={styles.fabSlot} pointerEvents="box-none">
-          <View pointerEvents="none" style={styles.fabGlow} />
-          <View style={styles.fabShell}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.fabButton,
-                pressed && styles.fabButtonPressed,
-              ]}
-              onPress={() => fabEmitter.emit()}
-            >
-              <MaterialIcons name="add" size={26} color="#FFFFFF" />
-            </Pressable>
-          </View>
+        <View
+          style={styles.barSurface}
+        >
+          <BlurView intensity={GLASS_BLUR_INTENSITY} tint="light" style={StyleSheet.absoluteFill} />
+          <View pointerEvents="none" style={styles.barTint} />
+          <View pointerEvents="none" style={styles.barHighlightBottom} />
+
+          {leftRouteIndex !== -1 ? (
+            <SideTab
+              active={state.index === leftRouteIndex}
+              icon="mail"
+              label="Forespørsler"
+              onPress={onPressVenstre}
+            />
+          ) : (
+            <View style={styles.sideSpacer} />
+          )}
+
+          <View style={styles.centerSpacer} />
+
+          {rightRouteIndex !== -1 ? (
+            <SideTab
+              active={state.index === rightRouteIndex}
+              icon="local-offer"
+              label="Tilbud"
+              badgeVisible={badgeCount > 0}
+              onPress={onPressHøyre}
+            />
+          ) : (
+            <View style={styles.sideSpacer} />
+          )}
         </View>
 
-        <View style={styles.barShadow}>
-          <View style={styles.barClip} onLayout={handleBarLayout}>
-            {barHeight > 0 ? (
-              <>
-                {canUseGlass ? (
-                  <GlassView
-                    pointerEvents="none"
-                    style={[
-                      StyleSheet.absoluteFill,
-                      styles.glassPill,
-                      { width: barWidth, height: barHeight },
-                    ]}
-                    glassEffectStyle="regular"
-                    tintColor="transparent"
-                  />
-                ) : (
-                  <View
-                    pointerEvents="none"
-                    style={[
-                      StyleSheet.absoluteFill,
-                      styles.fallbackPill,
-                      { width: barWidth, height: barHeight },
-                    ]}
-                  />
-                )}
-
-                <Svg
-                  width="100%"
-                  height="100%"
-                  viewBox={`0 0 ${barWidth} ${barHeight}`}
-                  preserveAspectRatio="none"
-                  style={StyleSheet.absoluteFill}
-                  pointerEvents="none"
-                >
-                  <Path
-                    d={buildPillPath(barWidth, barHeight)}
-                    fill="transparent"
-                  />
-                  <Path
-                    d={buildPillPath(barWidth, barHeight)}
-                    fill="none"
-                    stroke="rgba(255,255,255,0.26)"
-                    strokeWidth={1}
-                  />
-                </Svg>
-
-                <View pointerEvents="none" style={styles.highlightTop} />
-                <View pointerEvents="none" style={styles.highlightBottom} />
-              </>
-            ) : null}
-
-            <View style={styles.barOverlay}>
-              {leftRouteIndex !== -1 ? (
-                <SideTab
-                  active={state.index === leftRouteIndex}
-                  icon="mail"
-                  label="Forespørsler"
-                  onPress={() => {
-                    const route = state.routes[leftRouteIndex]
-                    const event = navigation.emit({
-                      type: 'tabPress',
-                      target: route.key,
-                      canPreventDefault: true,
-                    })
-
-                    if (!event.defaultPrevented) {
-                      navigation.navigate(route.name as never)
-                    }
-                  }}
-                />
-              ) : (
-                <View style={styles.sideSpacer} />
-              )}
-
-              <View style={styles.centerSpacer} />
-
-              {rightRouteIndex !== -1 ? (
-                <SideTab
-                  active={state.index === rightRouteIndex}
-                  icon="local-offer"
-                  label="Tilbud"
-                  onPress={() => {
-                    const route = state.routes[rightRouteIndex]
-                    const event = navigation.emit({
-                      type: 'tabPress',
-                      target: route.key,
-                      canPreventDefault: true,
-                    })
-
-                    if (!event.defaultPrevented) {
-                      navigation.navigate(route.name as never)
-                    }
-                  }}
-                />
-              ) : (
-                <View style={styles.sideSpacer} />
-              )}
-            </View>
-          </View>
+        <View style={styles.fabShell} pointerEvents="box-none">
+          <Pressable
+            onPress={onFabPress}
+            style={({ pressed }) => [styles.fabButton, pressed && styles.fabButtonPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Opprett nytt tilbud"
+          >
+            <MaterialIcons name="add" size={34} color="#FFFFFF" />
+          </Pressable>
         </View>
       </View>
     </View>
@@ -219,129 +177,106 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
   },
   wrapper: {
-    position: 'absolute',
-    left: '50%',
-    zIndex: 50,
-  },
-  fabSlot: {
-    position: 'absolute',
-    top: -24,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 2,
-  },
-  fabGlow: {
-    position: 'absolute',
-    width: FAB_SIZE + 20,
-    height: FAB_SIZE + 20,
-    borderRadius: 999,
-    backgroundColor: 'rgba(46,125,83,0.18)',
-    shadowColor: '#2E7D53',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.24,
-    shadowRadius: 24,
-    elevation: 2,
-    transform: [{ translateY: 1 }],
-  },
-  barShadow: {
-    overflow: 'visible',
-    shadowColor: '#191C1D',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 12,
-  },
-  barClip: {
+    paddingHorizontal: 0,
     overflow: 'visible',
   },
-
-  glassPill: {
-    borderRadius: PILL_RADIUS,
-  },
-  fallbackPill: {
-    borderRadius: PILL_RADIUS,
-    backgroundColor: 'rgba(255,255,255,0.82)',
-  },
-  highlightTop: {
-    position: 'absolute',
-    top: 1,
-    left: 10,
-    right: 10,
-    height: 16,
-    borderRadius: 999,
-    backgroundColor: 'transparent',
-    pointerEvents: 'none',
-  },
-  highlightBottom: {
-    position: 'absolute',
-    left: 14,
-    right: 14,
-    bottom: 2,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: 'transparent',
-    pointerEvents: 'none',
-  },
-
-  barOverlay: {
+  barSurface: {
+    marginTop: FAB_LIFT,
+    height: 76,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 16,
-    paddingVertical: 1,
-    backgroundColor: 'transparent',
-    overflow: 'visible',
-  },
-  sideButton: {
-    minWidth: 76,
-    alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    gap: 2,
-  },
-  sideButtonPressed: {
-    transform: [{ scale: 0.9 }],
-  },
-  sideSpacer: {
-    minWidth: 76,
-  },
-  centerSpacer: {
-    width: FAB_SIZE + 18,
-  },
-  sideLabel: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 10,
-    color: INACTIVE_COLOR,
-  },
-  sideLabelActive: {
-    color: ACTIVE_COLOR,
-  },
-  fabButton: {
-    width: FAB_SIZE + 8,
-    height: FAB_SIZE + 8,
-    borderRadius: (FAB_SIZE + 8) / 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: ACTIVE_COLOR,
-    transform: [{ scale: 1.1 }],
-    shadowColor: '#2E7D53',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingHorizontal: 20,
+    overflow: 'hidden',
+    zIndex: 1,
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
     elevation: 10,
   },
-  fabButtonPressed: {
-    transform: [{ scale: 0.9 }],
+  barTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: GLASS_OVERLAY,
+  },
+  barHighlightBottom: {
+    position: 'absolute',
+    left: 28,
+    right: 28,
+    bottom: 6,
+    height: 1,
+    backgroundColor: GLASS_EDGE,
+  },
+  tabButton: {
+    minWidth: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    top: -4,
+    paddingVertical: 0,
+  },
+  iconWrap: {
+    position: 'relative',
+  },
+  tabButtonPressed: {
+    opacity: 0.82,
+  },
+  sideSpacer: {
+    minWidth: 108,
+  },
+  centerSpacer: {
+    width: 116,
+  },
+  tabLabel: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    lineHeight: 15,
+    color: INACTIVE_COLOR,
+  },
+  tabLabelActive: {
+    fontFamily: 'DMSans_700Bold',
+    color: ACTIVE_COLOR,
   },
   fabShell: {
-    padding: 3,
-    borderRadius: 999,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: ACTIVE_COLOR,
+    position: 'absolute',
+    top: -3,
+    left: '50%',
+    width: FAB_TOTAL_SIZE,
+    height: FAB_TOTAL_SIZE,
+    marginLeft: -(FAB_TOTAL_SIZE / 2),
+    borderRadius: FAB_TOTAL_SIZE / 2,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3,
+  },
+  fabButton: {
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111111',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  fabButtonPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.96 }],
   },
 })

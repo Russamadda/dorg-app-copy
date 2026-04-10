@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import {
   View,
   Text,
@@ -9,20 +9,68 @@ import {
   Switch,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { Colors } from '../constants/colors'
 import type { Forespørsel, Firma } from '../types'
-import StatusBadge from './StatusBadge'
+import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import { genererTilbud } from '../lib/openai'
 import { sendTilbudEpost } from '../lib/resend'
-import { oppdaterForespørsel } from '../lib/supabase'
+import { oppdaterForespørsel, registrerForsteTilbudSendt } from '../lib/supabase'
+import { getTilbudKortStatus } from '../utils/tilbudStatus'
 
 interface Props {
   forespørsel: Forespørsel
   firma: Firma | null
   onOppdater: () => void
+  onÅpneUtkast?: (f: Forespørsel) => void
 }
 
-export default function ForespørselKort({ forespørsel, firma, onOppdater }: Props) {
+function UtkastForespørselKort({
+  forespørsel,
+  onÅpneUtkast,
+}: {
+  forespørsel: Forespørsel
+  onÅpneUtkast: (f: Forespørsel) => void
+}) {
+  const tittel =
+    forespørsel.jobbType?.trim() ||
+    forespørsel.kortBeskrivelse?.trim() ||
+    'Utkast'
+  const datoKilde = forespørsel.sistOppdatertDato ?? forespørsel.opprettetDato
+  const dato = new Date(datoKilde).toLocaleDateString('nb-NO', {
+    day: 'numeric',
+    month: 'short',
+  })
+  const statusMeta = getTilbudKortStatus(forespørsel)
+  const beskrivelseUtenTag = forespørsel.jobbBeskrivelse.replace(/^\[[^\]]+\]\s*/, '')
+
+  return (
+    <TouchableOpacity
+      style={styles.container}
+      onPress={() => onÅpneUtkast(forespørsel)}
+      activeOpacity={0.86}
+    >
+      <View style={styles.header}>
+        <View style={styles.headerRow}>
+          <Text style={styles.kundeNavn} numberOfLines={1}>
+            {tittel}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color="#888888" />
+        </View>
+        <Text style={styles.beskrivelse} numberOfLines={2}>
+          {beskrivelseUtenTag.trim() || 'Trykk for å fortsette'}
+        </Text>
+        <View style={styles.metaRow}>
+          <Text style={[styles.statusTekst, { color: statusMeta.color }]}>
+            {statusMeta.label}
+          </Text>
+          <Text style={styles.metaDot}>•</Text>
+          <Text style={styles.metaTekst}>{dato}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  )
+}
+
+function ForespørselKortInner({ forespørsel, firma, onOppdater }: Props) {
   const [ekspandert, setEkspandert] = useState(false)
   const [generertTekst, setGenerertTekst] = useState(forespørsel.generertTekst ?? '')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -36,10 +84,8 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
   const dato = new Date(forespørsel.opprettetDato).toLocaleDateString('nb-NO', {
     day: 'numeric',
     month: 'short',
-    year: 'numeric',
   })
-
-  const prisFormatert = `kr ${forespørsel.prisEksMva.toLocaleString('nb-NO')}`
+  const statusMeta = getTilbudKortStatus(forespørsel)
 
   async function generer(medJusteringer?: string) {
     if (!firma) return
@@ -54,6 +100,7 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
         adresse: firma.adresse,
         timepris: firma.timepris,
         justeringer: medJusteringer,
+        behandleSomUtkastUtenTekstanalyse: !medJusteringer,
       })
       setGenerertTekst(tekst)
       setVisJusteringsPanel(false)
@@ -70,14 +117,22 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
     setSender(true)
     setFeil('')
     try {
+      const sendtDato = new Date().toISOString()
+
       await sendTilbudEpost({
         tilEpost: forespørsel.kundeEpost,
         kundeNavn: forespørsel.kundeNavn,
         firmanavn: firma.firmanavn,
         generertTekst,
         prisEksMva: prisEksMva,
+        tilbudId: forespørsel.id,
       })
-      await oppdaterForespørsel(forespørsel.id, { status: 'sendt' })
+      await registrerForsteTilbudSendt({
+        tilbudId: forespørsel.id,
+        firmaId: forespørsel.firmaId,
+        opprettetDato: sendtDato,
+        versjon: forespørsel.versjon ?? 1,
+      })
       onOppdater()
     } catch {
       setFeil('Feil ved sending. Sjekk tilkoblingen.')
@@ -87,96 +142,100 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
   }
 
   const prisEksMva = Number(justertPris) || forespørsel.prisEksMva
-  const mva = prisEksMva * 0.25
-  const total = prisEksMva + mva
+  const harAdresse = Boolean(forespørsel.adresse)
+  const estimatLabel = prisEksMva.toLocaleString('nb-NO')
+  const firmanavn = firma?.firmanavn
 
   return (
     <View style={styles.container}>
-      {/* Header — alltid synlig */}
       <TouchableOpacity
         style={styles.header}
         onPress={() => setEkspandert(e => !e)}
-        activeOpacity={0.8}
+        activeOpacity={0.86}
       >
-        <View style={styles.rad1}>
-          <Text style={styles.kundeNavn}>{forespørsel.kundeNavn}</Text>
-          <View style={styles.rad1Høyre}>
-            <Text style={styles.pris}>{prisFormatert}</Text>
-            {ekspandert && (
-              <TouchableOpacity
-                onPress={(e) => { e.stopPropagation?.(); setEkspandert(false) }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Text style={styles.lukkTekst}>Lukk ↑</Text>
-              </TouchableOpacity>
-            )}
+        <View style={styles.headerRow}>
+          <Text style={styles.kundeNavn} numberOfLines={1}>
+            {forespørsel.kundeNavn}
+          </Text>
+
+          <View style={styles.chevronButton}>
+            <Ionicons
+              name={ekspandert ? 'chevron-down' : 'chevron-forward'}
+              size={16}
+              color="#888888"
+            />
           </View>
         </View>
 
-        <Text style={styles.jobbBeskrivelse} numberOfLines={ekspandert ? undefined : 2}>
+        {harAdresse ? (
+          <Text style={styles.adresse} numberOfLines={1}>
+            {forespørsel.adresse}
+          </Text>
+        ) : null}
+
+        <Text style={styles.beskrivelse} numberOfLines={ekspandert ? undefined : 2}>
           {forespørsel.jobbBeskrivelse}
         </Text>
 
-        <View style={styles.rad3}>
-          <Text style={styles.dato}>{dato}</Text>
-          <View style={styles.rad3Høyre}>
-            <StatusBadge status={forespørsel.status} />
-            {!ekspandert && (
-              <Ionicons name="chevron-down" size={16} color={Colors.textMuted} style={{ marginLeft: 8 }} />
-            )}
-          </View>
+        <View style={styles.metaRow}>
+          <Text style={[styles.statusTekst, { color: statusMeta.color }]}>
+            {statusMeta.label}
+          </Text>
+          <Text style={styles.metaDot}>•</Text>
+          <Text style={styles.metaTekst}>{dato}</Text>
         </View>
       </TouchableOpacity>
 
-      {/* Ekspandert innhold */}
       {ekspandert && (
         <View style={styles.ekspandert}>
           <View style={styles.divider} />
 
           {generertTekst ? (
             <View style={styles.forhåndsvisningWrapper}>
-              <TilbudsForhåndsvisning
-                tekst={generertTekst}
-                kundeNavn={forespørsel.kundeNavn}
-                firmanavn={firma?.firmanavn ?? ''}
-                adresse={firma?.adresse}
-                prisEksMva={prisEksMva}
-              />
+              <View style={styles.previewMeta}>
+                <Text style={styles.previewLabel}>Pris eks. mva</Text>
+                <Text style={styles.previewPrice}>kr {estimatLabel}</Text>
+                {firmanavn ? (
+                  <Text style={styles.previewSubtext}>{firmanavn}</Text>
+                ) : null}
+              </View>
 
-              {/* Handlingsknapper */}
+              <TilbudsForhåndsvisning tekst={generertTekst} />
+
               <View style={styles.knappeRad}>
                 <TouchableOpacity
-                  style={styles.justerKnapp}
+                  style={styles.sekundærKnapp}
                   onPress={() => setVisJusteringsPanel(v => !v)}
+                  activeOpacity={0.86}
                 >
-                  <Text style={styles.justerKnappTekst}>Juster tilbud</Text>
+                  <Text style={styles.sekundærKnappTekst}>Juster tilbud</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.sendKnapp, sender && styles.knappDisabled]}
+                  style={[styles.primærKnapp, sender && styles.knappDisabled]}
                   onPress={sendOgOppdater}
                   disabled={sender}
+                  activeOpacity={0.86}
                 >
                   {sender ? (
-                    <ActivityIndicator color="#fff" size="small" />
+                    <ActivityIndicator color="#FFFFFF" size="small" />
                   ) : (
-                    <Text style={styles.sendKnappTekst}>Send tilbud</Text>
+                    <Text style={styles.primærKnappTekst}>Send tilbud</Text>
                   )}
                 </TouchableOpacity>
               </View>
 
-              {/* Justeringspanel */}
               {visJusteringsPanel && (
                 <View style={styles.justeringsPanel}>
-                  <Text style={styles.feltLabel}>PRIS EKS. MVA</Text>
+                  <Text style={styles.feltLabel}>Pris eks. mva</Text>
                   <TextInput
                     style={styles.justerInput}
                     value={justertPris}
                     onChangeText={setJustertPris}
                     keyboardType="number-pad"
-                    placeholderTextColor={Colors.textMuted}
+                    placeholderTextColor="#888888"
                   />
 
-                  <Text style={[styles.feltLabel, { marginTop: 12 }]}>JUSTERINGER TIL AI</Text>
+                  <Text style={[styles.feltLabel, styles.fieldSpacing]}>Justeringer til AI</Text>
                   <TextInput
                     style={[styles.justerInput, styles.justerInputMultiline]}
                     value={justeringer}
@@ -184,51 +243,53 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
                     multiline
                     numberOfLines={3}
                     placeholder="F.eks: øk timepris, legg til rigg..."
-                    placeholderTextColor={Colors.textMuted}
+                    placeholderTextColor="#888888"
                     textAlignVertical="top"
                   />
 
                   <TouchableOpacity
-                    style={[styles.oppdaterKnapp, isGenerating && styles.knappDisabled]}
+                    style={[styles.sekundærKnapp, styles.panelButton, isGenerating && styles.knappDisabled]}
                     onPress={() => generer(justeringer)}
                     disabled={isGenerating}
+                    activeOpacity={0.86}
                   >
                     {isGenerating ? (
-                      <ActivityIndicator color={Colors.primary} size="small" />
+                      <ActivityIndicator color="#111111" size="small" />
                     ) : (
-                      <Text style={styles.oppdaterKnappTekst}>Oppdater tilbud</Text>
+                      <Text style={styles.sekundærKnappTekst}>Oppdater tilbud</Text>
                     )}
                   </TouchableOpacity>
 
                   <View style={styles.sendingsSeksjon}>
                     <View style={styles.switchRad}>
-                      <View style={{ flex: 1 }}>
+                      <View style={styles.switchText}>
                         <Text style={styles.switchLabel}>Automatiske påminnelser</Text>
                         <Text style={styles.switchSubLabel}>Dag 3 og dag 7</Text>
                       </View>
                       <Switch
                         value={automatiskePaminnelser}
                         onValueChange={setAutomatiskePaminnelser}
-                        trackColor={{ false: Colors.surfaceBorder, true: Colors.accent }}
-                        thumbColor="#fff"
+                        trackColor={{ false: '#CCCCCC', true: '#111111' }}
+                        thumbColor="#FFFFFF"
                       />
                     </View>
 
                     {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
 
-                    <TouchableOpacity style={styles.lagreUtkastKnapp}>
-                      <Text style={styles.lagreUtkastTekst}>Lagre utkast</Text>
+                    <TouchableOpacity style={styles.sekundærKnapp} activeOpacity={0.86}>
+                      <Text style={styles.sekundærKnappTekst}>Lagre utkast</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.bekreftKnapp, sender && styles.knappDisabled]}
+                      style={[styles.primærKnapp, sender && styles.knappDisabled]}
                       onPress={sendOgOppdater}
                       disabled={sender}
+                      activeOpacity={0.86}
                     >
                       {sender ? (
-                        <ActivityIndicator color="#fff" size="small" />
+                        <ActivityIndicator color="#FFFFFF" size="small" />
                       ) : (
-                        <Text style={styles.bekreftKnappTekst}>Bekreft og send</Text>
+                        <Text style={styles.primærKnappTekst}>Bekreft og send</Text>
                       )}
                     </TouchableOpacity>
 
@@ -236,21 +297,35 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
                   </View>
                 </View>
               )}
+
+              <TouchableOpacity
+                style={styles.lukkKnapp}
+                onPress={() => setEkspandert(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.lukkKnappTekst}>Lukk</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.genererWrapper}>
+              <View style={styles.previewMeta}>
+                <Text style={styles.previewLabel}>Prisestimat eks. mva</Text>
+                <Text style={styles.previewPrice}>kr {estimatLabel}</Text>
+              </View>
+
               <TouchableOpacity
-                style={[styles.genererKnapp, isGenerating && styles.knappDisabled]}
+                style={[styles.primærKnapp, styles.primærKnappFull, isGenerating && styles.knappDisabled]}
                 onPress={() => generer()}
                 disabled={isGenerating}
+                activeOpacity={0.86}
               >
                 {isGenerating ? (
                   <View style={styles.generererRad}>
-                    <ActivityIndicator color="#fff" size="small" />
-                    <Text style={styles.genererKnappTekst}>Genererer tilbud...</Text>
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                    <Text style={styles.primærKnappTekst}>Genererer tilbud...</Text>
                   </View>
                 ) : (
-                  <Text style={styles.genererKnappTekst}>Generer tilbud med AI</Text>
+                  <Text style={styles.primærKnappTekst}>Generer tilbud</Text>
                 )}
               </TouchableOpacity>
               {feil ? <Text style={styles.feilTekst}>{feil}</Text> : null}
@@ -262,267 +337,302 @@ export default function ForespørselKort({ forespørsel, firma, onOppdater }: Pr
   )
 }
 
-// ─── Forhåndsvisning ─────────────────────────────────────────────────────────
-
-function TilbudsForhåndsvisning({
-  tekst,
-  kundeNavn,
-  firmanavn,
-  adresse,
-  prisEksMva,
-}: {
-  tekst: string
-  kundeNavn: string
-  firmanavn: string
-  adresse?: string
-  prisEksMva: number
-}) {
-  const mva = prisEksMva * 0.25
-  const total = prisEksMva + mva
-  const dagensdato = new Date().toLocaleDateString('nb-NO')
-  const linjer = tekst.split('\n').filter(l => l.trim())
-
+function erLikeForespørselKortProps(prev: Props, next: Props): boolean {
+  if (prev.onOppdater !== next.onOppdater) {
+    return false
+  }
+  if (prev.onÅpneUtkast !== next.onÅpneUtkast) {
+    return false
+  }
+  if (prev.firma?.id !== next.firma?.id) {
+    return false
+  }
+  if (prev.firma?.firmanavn !== next.firma?.firmanavn) {
+    return false
+  }
+  if (prev.firma?.adresse !== next.firma?.adresse) {
+    return false
+  }
+  if (prev.firma?.timepris !== next.firma?.timepris) {
+    return false
+  }
+  const a = prev.forespørsel
+  const b = next.forespørsel
   return (
-    <View style={styles.tilbudBoks}>
-      <View style={styles.tilbudHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.tilbudMetaLabel}>FRA</Text>
-          <Text style={styles.tilbudMetaTekst}>{firmanavn}</Text>
-          {adresse ? <Text style={styles.tilbudMetaTekst}>{adresse}</Text> : null}
-        </View>
-        <View style={{ flex: 1, alignItems: 'flex-end' }}>
-          <Text style={styles.tilbudMetaLabel}>TIL</Text>
-          <Text style={styles.tilbudMetaTekst}>{kundeNavn}</Text>
-          <Text style={styles.tilbudMetaTekst}>{dagensdato}</Text>
-        </View>
-      </View>
-
-      <View style={styles.tilbudDivider} />
-
-      <View style={{ gap: 3 }}>
-        {linjer.map((linje, i) => {
-          if (linje.startsWith('## ') || linje.startsWith('# ')) {
-            return <Text key={i} style={styles.tilbudOverskrift}>{linje.replace(/^#+\s/, '')}</Text>
-          }
-          if (linje.startsWith('- ') || linje.startsWith('* ')) {
-            return <Text key={i} style={styles.tilbudBullet}>{'• '}{linje.replace(/^[-*]\s/, '')}</Text>
-          }
-          return <Text key={i} style={styles.tilbudTekst}>{linje.replace(/\*\*(.*?)\*\*/g, '$1')}</Text>
-        })}
-      </View>
-
-      <View style={styles.tilbudDivider} />
-
-      <View style={{ gap: 6 }}>
-        <PrisRad label="Arbeid/materialer" verdi={`kr ${prisEksMva.toLocaleString('nb-NO')}`} />
-        <PrisRad label="MVA (25%)" verdi={`kr ${Math.round(mva).toLocaleString('nb-NO')}`} />
-        <View style={styles.tilbudDivider} />
-        <PrisRad label="TOTALT inkl. MVA" verdi={`kr ${Math.round(total).toLocaleString('nb-NO')}`} bold />
-      </View>
-    </View>
+    a.id === b.id &&
+    a.status === b.status &&
+    a.generertTekst === b.generertTekst &&
+    a.prisEksMva === b.prisEksMva &&
+    a.kundeNavn === b.kundeNavn &&
+    a.jobbBeskrivelse === b.jobbBeskrivelse &&
+    a.kundeEpost === b.kundeEpost &&
+    a.opprettetDato === b.opprettetDato &&
+    a.kortBeskrivelse === b.kortBeskrivelse &&
+    a.jobbType === b.jobbType &&
+    a.adresse === b.adresse &&
+    a.firmaId === b.firmaId &&
+    a.versjon === b.versjon &&
+    a.draftStage === b.draftStage
   )
 }
 
-function PrisRad({ label, verdi, bold }: { label: string; verdi: string; bold?: boolean }) {
-  return (
-    <View style={styles.prisRad}>
-      <Text style={[styles.prisLabel, bold && styles.prisBold]}>{label}</Text>
-      <Text style={[styles.prisVerdi, bold && styles.prisBold]}>{verdi}</Text>
-    </View>
-  )
+function ForespørselKortVelger(props: Props) {
+  if (props.forespørsel.status === 'utkast') {
+    if (!props.onÅpneUtkast) return null
+    return (
+      <UtkastForespørselKort
+        forespørsel={props.forespørsel}
+        onÅpneUtkast={props.onÅpneUtkast}
+      />
+    )
+  }
+  return <ForespørselKortInner {...props} />
 }
+
+const ForespørselKort = React.memo(ForespørselKortVelger, erLikeForespørselKortProps)
+export default ForespørselKort
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: 12,
-    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
     overflow: 'hidden',
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  header: { padding: 16, gap: 8 },
-  rad1: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+  header: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 8,
   },
-  rad1Høyre: {
+  headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 12,
   },
   kundeNavn: {
+    fontSize: 16,
+    lineHeight: 21,
     fontFamily: 'DMSans_700Bold',
-    fontSize: 15,
-    color: Colors.textPrimary,
-  },
-  pris: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 15,
-    color: Colors.primary,
-  },
-  lukkTekst: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.textMuted,
-  },
-  jobbBeskrivelse: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.textSecondary,
-    lineHeight: 19,
-  },
-  rad3: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  rad3Høyre: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dato: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 12,
-    color: Colors.textMuted,
-  },
-  divider: { height: 1, backgroundColor: Colors.surfaceBorder },
-  ekspandert: {},
-  forhåndsvisningWrapper: { padding: 12, gap: 12 },
-  genererWrapper: { padding: 16, alignItems: 'center', gap: 12 },
-  tilbudBoks: {
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: 8,
-    padding: 16,
-  },
-  tilbudHeader: { flexDirection: 'row', marginBottom: 12 },
-  tilbudMetaLabel: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 10,
-    color: Colors.textMuted,
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  },
-  tilbudMetaTekst: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  tilbudDivider: { height: 1, backgroundColor: Colors.surfaceBorder, marginVertical: 10 },
-  tilbudOverskrift: {
-    fontFamily: 'DMSerifDisplay_400Regular',
-    fontSize: 15,
-    color: Colors.textPrimary,
-    marginTop: 6,
-  },
-  tilbudBullet: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-    paddingLeft: 4,
-  },
-  tilbudTekst: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-  },
-  prisRad: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  prisLabel: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: Colors.textSecondary },
-  prisVerdi: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: Colors.textPrimary },
-  prisBold: { fontFamily: 'DMSans_700Bold', fontSize: 15, color: Colors.textPrimary },
-  knappeRad: { flexDirection: 'row', gap: 8 },
-  justerKnapp: {
+    color: '#111111',
     flex: 1,
-    height: 36,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 6,
+  },
+  chevronButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F0F2F6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  justerKnappTekst: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: Colors.primary },
-  sendKnapp: {
-    flex: 1.5,
-    height: 36,
-    backgroundColor: Colors.primary,
-    borderRadius: 6,
+  adresse: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+  },
+  beskrivelse: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_400Regular',
+    color: '#333333',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusTekst: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  metaDot: {
+    marginHorizontal: 5,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: '#888888',
+  },
+  metaTekst: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#F0F0F0',
+    marginHorizontal: 16,
+  },
+  ekspandert: {},
+  forhåndsvisningWrapper: {
+    padding: 16,
+    gap: 12,
+  },
+  genererWrapper: {
+    padding: 16,
+    gap: 12,
+  },
+  previewMeta: {
+    backgroundColor: '#F4F5F8',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  previewLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: 'DMSans_700Bold',
+    color: '#888888',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  previewPrice: {
+    fontSize: 22,
+    lineHeight: 26,
+    fontFamily: 'DMSans_700Bold',
+    color: '#111111',
+  },
+  previewSubtext: {
+    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+  },
+  knappeRad: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  primærKnapp: {
+    flex: 1,
+    height: 46,
+    backgroundColor: '#111111',
+    borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 18,
   },
-  sendKnappTekst: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: '#fff' },
+  primærKnappFull: {
+    flex: 0,
+    width: '100%',
+    height: 50,
+  },
+  primærKnappTekst: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  sekundærKnapp: {
+    flex: 1,
+    height: 46,
+    borderRadius: 999,
+    backgroundColor: '#F4F5F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  sekundærKnappTekst: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 14,
+    color: '#111111',
+  },
+  panelButton: {
+    marginTop: 8,
+  },
+  knappDisabled: {
+    opacity: 0.6,
+  },
   justeringsPanel: {
-    backgroundColor: '#F9FAF9',
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: 8,
+    backgroundColor: '#EEF1F6',
+    borderRadius: 18,
     padding: 16,
   },
   feltLabel: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 11,
-    color: Colors.textMuted,
-    letterSpacing: 0.6,
-    marginBottom: 4,
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: 'DMSans_700Bold',
+    color: '#888888',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  fieldSpacing: {
+    marginTop: 12,
   },
   justerInput: {
-    height: 44,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    height: 46,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 14,
     fontFamily: 'DMSans_400Regular',
+    fontSize: 15,
+    color: '#111111',
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  justerInputMultiline: {
+    height: 80,
+    paddingTop: 12,
+  },
+  sendingsSeksjon: {
+    marginTop: 12,
+    gap: 10,
+  },
+  switchRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    gap: 16,
+  },
+  switchText: {
+    flex: 1,
+  },
+  switchLabel: {
+    fontFamily: 'DMSans_500Medium',
     fontSize: 14,
-    color: Colors.textPrimary,
+    color: '#111111',
   },
-  justerInputMultiline: { height: 80, paddingTop: 10 },
-  oppdaterKnapp: {
-    height: 36,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 6,
+  switchSubLabel: {
+    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+  },
+  lukkKnapp: {
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
+    paddingVertical: 12,
   },
-  oppdaterKnappTekst: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: Colors.primary },
-  sendingsSeksjon: { marginTop: 12, gap: 8 },
-  switchRad: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  switchLabel: { fontFamily: 'DMSans_500Medium', fontSize: 14, color: Colors.textPrimary },
-  switchSubLabel: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: Colors.textMuted },
-  lagreUtkastKnapp: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 8,
+  lukkKnappTekst: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+  },
+  feilTekst: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: '#CC3333',
+    textAlign: 'center',
+  },
+  infoTekst: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+    textAlign: 'center',
+  },
+  generererRad: {
+    flexDirection: 'row',
+    gap: 10,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  lagreUtkastTekst: { fontFamily: 'DMSans_500Medium', fontSize: 14, color: Colors.primary },
-  bekreftKnapp: {
-    height: 48,
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  knappDisabled: { opacity: 0.7 },
-  bekreftKnappTekst: { fontFamily: 'DMSans_700Bold', fontSize: 15, color: '#fff' },
-  infoTekst: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: Colors.textMuted, textAlign: 'center' },
-  genererKnapp: {
-    height: 48,
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-  },
-  genererKnappTekst: { fontFamily: 'DMSans_700Bold', fontSize: 15, color: '#fff' },
-  generererRad: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  feilTekst: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: Colors.danger, textAlign: 'center' },
 })

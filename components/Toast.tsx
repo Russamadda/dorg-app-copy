@@ -1,85 +1,166 @@
 import { useEffect, useRef } from 'react'
-import { Animated, Text, StyleSheet } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { getFloatingTabBarPadding } from './FloatingTabBar'
+import { Animated, Platform, StyleSheet, Text, View } from 'react-native'
+import { BlurView } from 'expo-blur'
+import { getFloatingToastBottomOffset } from './FloatingTabBar'
 
 interface ToastProps {
   melding: string
   type: 'suksess' | 'feil'
   synlig: boolean
+  onHide?: () => void
 }
 
-export function Toast({ melding, type, synlig }: ToastProps) {
-  const insets = useSafeAreaInsets()
+export function Toast({ melding, type, synlig, onHide }: ToastProps) {
   const opacity = useRef(new Animated.Value(0)).current
-  const translateY = useRef(new Animated.Value(20)).current
+  const translateY = useRef(new Animated.Value(16)).current
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onHideRef = useRef(onHide)
+
+  onHideRef.current = onHide
 
   useEffect(() => {
-    if (!synlig) return
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
 
-    const hideTimer = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(opacity, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(translateY, {
-          toValue: 20,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start()
-    }, 2500)
+    if (!synlig || !melding.trim()) {
+      opacity.stopAnimation()
+      translateY.stopAnimation()
+      opacity.setValue(0)
+      translateY.setValue(16)
+      return
+    }
+
+    opacity.setValue(0)
+    translateY.setValue(16)
 
     Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
-        duration: 200,
+        duration: 220,
         useNativeDriver: true,
       }),
       Animated.timing(translateY, {
         toValue: 0,
-        duration: 200,
+        duration: 220,
         useNativeDriver: true,
       }),
-    ]).start()
+    ]).start(({ finished }) => {
+      if (!finished) {
+        return
+      }
 
-    return () => clearTimeout(hideTimer)
+      hideTimerRef.current = setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(opacity, {
+            toValue: 0,
+            duration: 220,
+            useNativeDriver: true,
+          }),
+          Animated.timing(translateY, {
+            toValue: 16,
+            duration: 220,
+            useNativeDriver: true,
+          }),
+        ]).start(({ finished: hideFinished }) => {
+          if (hideFinished) {
+            hideTimerRef.current = null
+            onHideRef.current?.()
+          }
+        })
+      }, 2500)
+    })
+
+    return () => {
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = null
+      }
+      opacity.stopAnimation()
+      translateY.stopAnimation()
+    }
   }, [synlig, melding, opacity, translateY])
+
+  if (!synlig || !melding.trim()) {
+    return null
+  }
 
   return (
     <Animated.View
       pointerEvents="none"
       style={[
-        styles.container,
-        { bottom: getFloatingTabBarPadding(insets.bottom) + 18 },
+        styles.host,
+        { bottom: getFloatingToastBottomOffset() },
         { opacity, transform: [{ translateY }] },
-        type === 'feil' && styles.feil,
       ]}
     >
-      <Text style={styles.tekst}>{melding}</Text>
+      <View style={styles.surface}>
+        <BlurView
+          intensity={72}
+          tint="light"
+          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          pointerEvents="none"
+          style={[styles.tint, type === 'feil' ? styles.tintFeil : styles.tintSuksess]}
+        />
+        <Text style={[styles.tekst, type === 'feil' ? styles.tekstFeil : styles.tekstSuksess]}>
+          {melding}
+        </Text>
+      </View>
     </Animated.View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
+  host: {
     position: 'absolute',
-    left: 20,
-    right: 20,
-    backgroundColor: '#1B4332',
-    borderRadius: 10,
-    padding: 14,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
     alignItems: 'center',
-    zIndex: 999,
+    zIndex: 9999,
   },
-  feil: {
-    backgroundColor: '#DC2626',
+  surface: {
+    maxWidth: '86%',
+    minHeight: 46,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.38)',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  tint: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tintSuksess: {
+    backgroundColor: 'rgba(230,236,245,0.8)',
+  },
+  tintFeil: {
+    backgroundColor: 'rgba(243,227,233,0.82)',
   },
   tekst: {
-    color: '#FFFFFF',
     fontSize: 14,
+    lineHeight: 18,
     fontFamily: 'DMSans_500Medium',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  tekstSuksess: {
+    color: '#243033',
+  },
+  tekstFeil: {
+    color: '#7A3145',
   },
 })

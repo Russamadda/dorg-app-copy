@@ -9,7 +9,7 @@ export function SkeletonLoader({ style }: SkeletonLoaderProps) {
   const opacity = useRef(new Animated.Value(0.3)).current
 
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(opacity, {
           toValue: 1,
@@ -22,18 +22,25 @@ export function SkeletonLoader({ style }: SkeletonLoaderProps) {
           useNativeDriver: true,
         }),
       ])
-    ).start()
-  }, [])
+    )
+
+    loop.start()
+
+    return () => {
+      loop.stop()
+      opacity.stopAnimation()
+    }
+  }, [opacity])
 
   return (
     <Animated.View style={[styles.container, style, { opacity }]}>
       <View style={styles.titleLine} />
       <View style={styles.line} />
       <View style={styles.lineShort} />
-      <View style={[styles.line, { marginTop: 16 }]} />
+      <View style={[styles.line, styles.spacedLine]} />
       <View style={styles.line} />
       <View style={styles.lineShort} />
-      <View style={[styles.line, { marginTop: 16 }]} />
+      <View style={[styles.line, styles.spacedLine]} />
       <View style={styles.lineShort} />
     </Animated.View>
   )
@@ -51,7 +58,6 @@ const styles = StyleSheet.create({
     width: '60%',
     backgroundColor: '#E2E8E4',
     borderRadius: 4,
-    marginBottom: 8,
   },
   line: {
     height: 14,
@@ -64,5 +70,14 @@ const styles = StyleSheet.create({
     width: '75%',
     backgroundColor: '#E2E8E4',
     borderRadius: 4,
+  },
+  lineTiny: {
+    height: 14,
+    width: '38%',
+    backgroundColor: '#E2E8E4',
+    borderRadius: 4,
+  },
+  spacedLine: {
+    marginTop: 16,
   },
 })

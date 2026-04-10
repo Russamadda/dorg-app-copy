@@ -1,126 +1,146 @@
-﻿import React from 'react'
-import { View, Text, StyleSheet, Pressable } from 'react-native'
+import React, { useEffect, useRef } from 'react'
+import { View, Text, StyleSheet, Pressable, Animated } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { beregnTilbudTotalInklMva } from '../lib/tilbudPris'
 import type { Forespørsel } from '../types'
-
-type TilbudStatus = 'sendt' | 'avventer' | 'paminnelse' | 'siste' | 'godkjent' | 'avslatt'
-
-const statusConfig: Record<
-  TilbudStatus,
-  {
-    tekst: string
-    bg: string
-    farge: string
-    border: string
-  }
-> = {
-  sendt: {
-    tekst: 'Sendt',
-    bg: '#F9FAFB',
-    farge: '#6B7280',
-    border: '#E5E7EB',
-  },
-  avventer: {
-    tekst: 'Sendt',
-    bg: '#F9FAFB',
-    farge: '#6B7280',
-    border: '#E5E7EB',
-  },
-  paminnelse: {
-    tekst: 'Sendt',
-    bg: '#F9FAFB',
-    farge: '#6B7280',
-    border: '#E5E7EB',
-  },
-  siste: {
-    tekst: 'Ring kunden',
-    bg: '#FFF7ED',
-    farge: '#9A3412',
-    border: '#FED7AA',
-  },
-  godkjent: {
-    tekst: '✓ Godkjent',
-    bg: '#F0FDF4',
-    farge: '#166534',
-    border: '#BBF7D0',
-  },
-  avslatt: {
-    tekst: '✕ Avslått',
-    bg: '#FEF2F2',
-    farge: '#991B1B',
-    border: '#FECACA',
-  },
-}
-
-const formaterDato = (dato: string) => {
-  return new Date(dato).toLocaleDateString('nb-NO', {
-    day: 'numeric',
-    month: 'long',
-  })
-}
-
-const dagerSiden = (dato: string): string => {
-  const sendt = new Date(dato)
-  const iDag = new Date()
-  const diff = Math.floor((iDag.getTime() - sendt.getTime()) / (1000 * 60 * 60 * 24))
-
-  if (diff === 0) return 'I dag'
-  if (diff === 1) return 'I går'
-  if (diff < 7) return `${diff} dager siden`
-  if (diff < 14) return '1 uke siden'
-  return `${Math.floor(diff / 7)} uker siden`
-}
+import { getTilbudKortStatus } from '../utils/tilbudStatus'
 
 interface TilbudKortProps {
   tilbud: Forespørsel
   onPress: (tilbud: Forespørsel) => void
 }
 
-export default function TilbudKort({ tilbud, onPress }: TilbudKortProps) {
-  const config = statusConfig[tilbud.status as TilbudStatus] ?? statusConfig.sendt
-  const erFolgOpp = tilbud.status === 'siste'
-  const visSendtIkon =
-    tilbud.status === 'sendt' || tilbud.status === 'avventer' || tilbud.status === 'paminnelse'
+function formaterKortDato(tilbud: Forespørsel) {
+  const dato =
+    tilbud.sistSendtDato ??
+    tilbud.sendtDato ??
+    tilbud.opprettetDato
 
-  const datoTekst = formaterDato(tilbud.opprettetDato)
-  const elapsed = dagerSiden(tilbud.opprettetDato)
-  const datoOgTid = `${datoTekst} · ${elapsed}`
-  const belopFormatert = `kr ${tilbud.prisEksMva.toLocaleString('nb-NO')}`
+  return new Date(dato).toLocaleDateString('nb-NO', {
+    day: 'numeric',
+    month: 'short',
+  })
+}
+
+function TilbudKortInner({ tilbud, onPress }: TilbudKortProps) {
+  const pulseAnim = useRef(new Animated.Value(0)).current
+  const totalInklMva = beregnTilbudTotalInklMva(tilbud)
+  const tjenestetittel = tilbud.kortBeskrivelse ?? tilbud.jobbType ?? 'Tilbud'
+  const statusMeta = getTilbudKortStatus(tilbud)
+  const datoTekst = formaterKortDato(tilbud)
+  const visUlestIndikator =
+    !tilbud.settSomLest &&
+    (tilbud.status === 'godkjent' || tilbud.status === 'justering')
+  const ulestFarge = tilbud.status === 'godkjent' ? '#16A34A' : '#2563EB'
+  const outlineOpacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.24, 0.7],
+  })
+
+  useEffect(() => {
+    if (!visUlestIndikator) {
+      pulseAnim.stopAnimation()
+      pulseAnim.setValue(0)
+      return
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1050,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 1050,
+          useNativeDriver: true,
+        }),
+      ])
+    )
+
+    loop.start()
+
+    return () => {
+      loop.stop()
+      pulseAnim.setValue(0)
+    }
+  }, [pulseAnim, visUlestIndikator])
 
   return (
-    <Pressable onPress={() => onPress(tilbud)} style={styles.pressableCard}>
+    <Pressable
+      onPress={() => onPress(tilbud)}
+      style={styles.pressableCard}
+    >
       <View style={styles.card}>
-        {erFolgOpp ? <View style={styles.topBar} /> : null}
+        {visUlestIndikator ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.unreadOutline,
+              {
+                borderColor: ulestFarge,
+                opacity: outlineOpacity,
+              },
+            ]}
+          />
+        ) : null}
 
-        <View style={styles.body}>
-          <View style={styles.header}>
-            <Text style={styles.navn}>{tilbud.kundeNavn}</Text>
+        <View style={styles.cardChevron}>
+          <Ionicons name="chevron-forward" size={18} color="#888888" />
+        </View>
 
-            <View
-              style={[
-                styles.statusPill,
-                {
-                  backgroundColor: config.bg,
-                  borderColor: config.border,
-                },
-              ]}
-            >
-              <View style={styles.statusInnhold}>
-                {visSendtIkon ? (
-                  <Ionicons name="arrow-redo-outline" size={12} color={config.farge} />
-                ) : null}
-                <Text style={[styles.statusTekst, { color: config.farge }]}>{config.tekst}</Text>
+        <View style={styles.topRow}>
+          <View style={styles.topMetaText}>
+            <Text style={styles.navn} numberOfLines={1}>
+              {tilbud.kundeNavn}
+            </Text>
+            {tilbud.adresse ? (
+              <Text style={styles.adresse} numberOfLines={1}>
+                {tilbud.adresse}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.dateGroup}>
+            <Text style={styles.dateText}>{datoTekst}</Text>
+          </View>
+        </View>
+
+        <View style={styles.bottomRow}>
+          <View style={styles.mainContent}>
+            <View style={styles.descriptionWrap}>
+              <Text style={styles.tjeneste} numberOfLines={1}>
+                {tjenestetittel}
+              </Text>
+            </View>
+
+            <View style={styles.footerRow}>
+              <View style={styles.metaRow}>
+                {statusMeta.dotCheckmark ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={16}
+                    color={statusMeta.dotColor}
+                    style={styles.statusIcon}
+                  />
+                ) : (
+                  <View style={[styles.dot, { backgroundColor: statusMeta.dotColor }]} />
+                )}
+
+                <Text style={[styles.metaText, { color: statusMeta.color }]}>
+                  {statusMeta.label}
+                </Text>
               </View>
             </View>
           </View>
 
-          <Text style={styles.jobb} numberOfLines={1}>
-            {tilbud.jobbBeskrivelse}
-          </Text>
-
-          <View style={styles.bunn}>
-            <Text style={styles.datoTekst}>{datoOgTid}</Text>
-            <Text style={styles.belop}>{belopFormatert}</Text>
+          <View style={styles.sideColumn}>
+            <View style={styles.priceRow}>
+              <Text style={styles.pris} numberOfLines={1}>
+                kr {totalInklMva.toLocaleString('nb-NO')}
+              </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -128,77 +148,169 @@ export default function TilbudKort({ tilbud, onPress }: TilbudKortProps) {
   )
 }
 
+function erLikeTilbudKortProps(prev: TilbudKortProps, next: TilbudKortProps): boolean {
+  if (prev.onPress !== next.onPress) {
+    return false
+  }
+  const a = prev.tilbud
+  const b = next.tilbud
+  return (
+    a.id === b.id &&
+    a.status === b.status &&
+    a.settSomLest === b.settSomLest &&
+    a.kundeNavn === b.kundeNavn &&
+    a.adresse === b.adresse &&
+    a.sistSendtDato === b.sistSendtDato &&
+    a.sendtDato === b.sendtDato &&
+    a.opprettetDato === b.opprettetDato &&
+    a.kortBeskrivelse === b.kortBeskrivelse &&
+    a.jobbType === b.jobbType &&
+    a.timer === b.timer &&
+    a.materialkostnad === b.materialkostnad &&
+    a.prisEksMva === b.prisEksMva
+  )
+}
+
+const TilbudKort = React.memo(TilbudKortInner, erLikeTilbudKortProps)
+export default TilbudKort
+
 const styles = StyleSheet.create({
   pressableCard: {
     flex: 1,
     alignSelf: 'stretch',
   },
   card: {
+    position: 'relative',
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E8EDE9',
-    overflow: 'hidden',
+    borderRadius: 20,
+    minHeight: 126,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  topBar: {
-    height: 4,
-    width: '100%',
-    backgroundColor: '#D97706',
+  unreadOutline: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    borderRadius: 20,
+    borderWidth: 1.5,
   },
-  body: {
-    padding: 16,
+  cardChevron: {
+    position: 'absolute',
+    top: '56%',
+    right: 16,
+    transform: [{ translateY: -7 }],
   },
-  header: {
+  topRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: 12,
+    minHeight: 34,
+  },
+  bottomRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    flex: 1,
+    gap: 12,
+    minHeight: 52,
+    paddingTop: 6,
+  },
+  mainContent: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'space-between',
+  },
+  topMetaText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  dateGroup: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    justifyContent: 'flex-end',
+    flexShrink: 0,
+  },
+  dateText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
+    textAlign: 'right',
+  },
+  descriptionWrap: {
+    minWidth: 0,
+    paddingRight: 4,
   },
   navn: {
     fontSize: 16,
-    fontFamily: 'DMSans_500Medium',
-    color: '#111827',
-    flex: 1,
-    marginRight: 8,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#111111',
   },
-  jobb: {
+  adresse: {
     fontSize: 13,
+    lineHeight: 17,
     fontFamily: 'DMSans_400Regular',
-    color: '#6B7280',
-    marginBottom: 14,
+    color: '#888888',
+    marginTop: 2,
   },
-  bunn: {
+  tjeneste: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 22,
+    fontFamily: 'DMSans_700Bold',
+    color: '#222222',
+  },
+  footerRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  datoTekst: {
-    fontSize: 12,
-    fontFamily: 'DMSans_400Regular',
-    color: '#9CA3AF',
+  metaRow: {
     flex: 1,
-    marginRight: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
   },
-  belop: {
-    fontSize: 16,
+  statusIcon: {
+    marginTop: 1,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  metaText: {
+    fontSize: 13,
+    lineHeight: 18,
     fontFamily: 'DMSans_500Medium',
-    color: '#1B4332',
   },
-  statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
+  sideColumn: {
+    width: 136,
+    position: 'relative',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
     flexShrink: 0,
   },
-  statusInnhold: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
+  priceRow: {
+    width: '100%',
+    alignItems: 'stretch',
+    justifyContent: 'flex-end',
   },
-  statusTekst: {
-    fontSize: 11,
-    fontFamily: 'DMSans_500Medium',
-    letterSpacing: 0.2,
+  pris: {
+    width: '100%',
+    fontSize: 17,
+    lineHeight: 21,
+    fontFamily: 'DMSans_700Bold',
+    color: '#1F5A3D',
+    flexShrink: 1,
+    textAlign: 'right',
   },
 })

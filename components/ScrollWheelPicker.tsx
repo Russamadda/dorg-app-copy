@@ -1,65 +1,59 @@
-import { View, Text, StyleSheet } from 'react-native'
+import { View, StyleSheet, type TextStyle, type StyleProp, type ViewStyle } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
-import { Colors } from '../constants/colors'
 
 interface Props {
-  label: string
   value: number
   onChange: (val: number) => void
   values: number[]
   suffix: string
+  formatLabel?: (v: number) => string
+  itemStyle?: StyleProp<TextStyle>
+  wrapperStyle?: StyleProp<ViewStyle>
+  itemColor?: string
 }
 
-export default function ScrollWheelPicker({ label, value, onChange, values, suffix }: Props) {
+export default function ScrollWheelPicker({
+  value,
+  onChange,
+  values,
+  suffix,
+  formatLabel,
+  itemStyle,
+  wrapperStyle,
+  itemColor,
+}: Props) {
   return (
-    <View style={styles.container}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.pickerWrapper}>
-        <Picker
-          selectedValue={value}
-          onValueChange={(v) => onChange(Number(v))}
-          style={styles.picker}
-          itemStyle={styles.item}
-        >
-          {values.map(v => (
-            <Picker.Item
-              key={v}
-              label={`${v.toLocaleString('nb-NO')} ${suffix}`}
-              value={v}
-            />
-          ))}
-        </Picker>
-      </View>
+    <View style={[styles.wrapper, wrapperStyle]}>
+      <Picker
+        selectedValue={value}
+        onValueChange={(v) => onChange(Number(v))}
+        style={styles.picker}
+        itemStyle={[styles.item, itemColor ? { color: itemColor } : null, itemStyle]}
+      >
+        {values.map((v) => (
+          <Picker.Item
+            key={String(v)}
+            label={formatLabel ? formatLabel(v) : `${v.toLocaleString('nb-NO')} ${suffix}`}
+            value={v}
+          />
+        ))}
+      </Picker>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
+  wrapper: {
     flex: 1,
-  },
-  label: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 11,
-    color: '#6B7280',
-    letterSpacing: 0.6,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  pickerWrapper: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 10,
     overflow: 'hidden',
-    height: 120,
   },
   picker: {
-    height: 120,
+    flex: 1,
   },
   item: {
-    fontSize: 15,
+    fontSize: 13,
     color: '#111827',
-    height: 120,
+    height: 130,
   },
 })

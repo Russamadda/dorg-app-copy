@@ -9,7 +9,6 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="tilbud" />
-      <Tabs.Screen name="bedrift" options={{ href: null }} />
     </Tabs>
   )
 }
