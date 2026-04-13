@@ -13,12 +13,15 @@ import {
 } from '@expo-google-fonts/dm-serif-display'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import type { Session } from '@supabase/supabase-js'
-import { hentAuthCallbackParams } from '../lib/auth'
+import { hentAuthCallbackParams, normaliserEpost } from '../lib/auth'
 import { supabase } from '../lib/supabase'
+import { BRAND_BACKGROUND_BASE_COLOR, prefetchBrandBackground } from '../lib/backgroundConfig'
 
 void SplashScreen.preventAutoHideAsync().catch(() => {
   // This can already be handled by Expo during fast refresh / dev reloads.
 })
+
+void prefetchBrandBackground()
 
 export default function RootLayout() {
   const router = useRouter()
@@ -31,6 +34,7 @@ export default function RootLayout() {
     DMSerifDisplay_400Regular,
   })
   const [session, setSession] = useState<Session | null | undefined>(undefined)
+  const devAutoLoginForsokt = useRef(false)
 
   useEffect(() => {
     if ((fontsLoaded || fontError) && !splashHiddenRef.current) {
@@ -42,9 +46,21 @@ export default function RootLayout() {
   }, [fontsLoaded, fontError])
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session ?? null)
-    })
+    supabase.auth
+      .getSession()
+      .then(({ data: { session }, error }) => {
+        if (error) {
+          // Ugyldig eller utløpt refresh token i AsyncStorage — rydd lokalt og vis login.
+          void supabase.auth.signOut({ scope: 'local' })
+          setSession(null)
+          return
+        }
+        setSession(session ?? null)
+      })
+      .catch(() => {
+        void supabase.auth.signOut({ scope: 'local' })
+        setSession(null)
+      })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession ?? null)
@@ -56,6 +72,35 @@ export default function RootLayout() {
 
     return () => subscription.unsubscribe()
   }, [router])
+
+  // Kun Expo/dev: logg inn automatisk hvis EXPO_PUBLIC_DEV_AUTO_LOGIN_* er satt (aldri i produksjon).
+  useEffect(() => {
+    if (!__DEV__) {
+      return
+    }
+    if (session === undefined || session) {
+      return
+    }
+    const epost = process.env.EXPO_PUBLIC_DEV_AUTO_LOGIN_EMAIL?.trim()
+    const passord = process.env.EXPO_PUBLIC_DEV_AUTO_LOGIN_PASSWORD
+    if (!epost || !passord) {
+      return
+    }
+    if (devAutoLoginForsokt.current) {
+      return
+    }
+    devAutoLoginForsokt.current = true
+    void supabase.auth
+      .signInWithPassword({
+        email: normaliserEpost(epost),
+        password: passord,
+      })
+      .then(({ error }) => {
+        if (error) {
+          console.warn('[dev] Auto-login feilet:', error.message)
+        }
+      })
+  }, [session])
 
   useEffect(() => {
     async function handterAuthLenke(url: string | null) {
@@ -153,7 +198,12 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, overflow: 'visible' }}>
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: BRAND_BACKGROUND_BASE_COLOR },
+        }}
+      >
         <Stack.Screen name="index" />
         <Stack.Screen name="auth" />
         <Stack.Screen name="(tabs)" />

@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import {
   View,
@@ -33,7 +40,8 @@ import {
   supabase,
 } from '../lib/supabase'
 import { getCachedFirma } from '../lib/firmaCache'
-import { fjernKortLinje } from '../lib/tekstUtils'
+import { formatTimerOversiktNyttTilbud } from '../lib/formatTilbudVisning'
+import { fjernKortLinje, rensEnkelMarkdownForRedigering } from '../lib/tekstUtils'
 import {
   finaliserTilbudTekstSync,
   formaterOppstartDatoNb,
@@ -45,6 +53,38 @@ import { SkeletonLoader } from './SkeletonLoader'
 import { KundeKontaktKalender, startOfLocalDay } from './KundeKontaktKalender'
 import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import type { Firma, Forespørsel } from '../types'
+import { resolveJobbBeskrivelsePlaceholder } from '../constants/tjenestePlaceholders'
+import {
+  consumePendingOfferFlowRecordingDemo,
+  consumeSuppressOfferFlowDemoFormFocusOnce,
+  markOfferFlowPostSendDetaljerDemo,
+} from '../lib/demoRecording/offerFlowDemoBus'
+import {
+  OFFER_FLOW_DEMO_JOBB_TEKST,
+  OFFER_FLOW_DEMO_KUNDE_EPOST,
+  OFFER_FLOW_DEMO_KUNDE_NAVN,
+  OFFER_FLOW_DEMO_KUNDE_TELEFON,
+  OFFER_FLOW_DEMO_MATERIALE_MÅL,
+  OFFER_FLOW_DEMO_PREVIEW_SCROLL_MS,
+  OFFER_FLOW_DEMO_PROSJEKT_ADRESSE,
+  OFFER_FLOW_DEMO_TIMER_MÅL,
+  OFFER_FLOW_DEMO_TYPING_MS_PER_CHAR,
+  OFFER_FLOW_DEMO_WHEEL_STEP_MS,
+} from '../lib/demoRecording/offerFlowDemoConfig'
+import {
+  isOfferFlowRecordingDemoEnabled,
+  offerFlowDemoMockSendOnly,
+  shouldUseStubAiInOfferFlowRecordingDemo,
+} from '../lib/demoRecording/offerFlowDemoFlags'
+import {
+  runButtonPressAnimation,
+  sleep,
+  smoothScrollY,
+  stagedScrollToY,
+  stepThroughPickerValues,
+  typeTextIncremental,
+} from '../lib/demoRecording/offerFlowDemoPrimitives'
+import { byggStubTilbudForRecordingDemo } from '../lib/demoRecording/stubTilbudForRecordingDemo'
 
 const TIMER_VERDIER = [
   0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -57,52 +97,8 @@ const MATERIALE_VERDIER = [
   20000, 25000, 30000, 40000, 50000,
 ]
 
-/** Nøkler matcher `FAGKATEGORIER[].id` i lib/fagkategorier.ts (lagring: firma.fagkategori). */
-const PLACEHOLDERS = {
-  snekker:
-    'F.eks: Legge parkett i stue og gang (ca 40 kvm), rive gammelt gulv og montere nye lister.',
-
-  maler:
-    'F.eks: Male stue og kjøkken, sparkle hull og ujevnheter, to strøk på vegger og tak.',
-
-  elektriker:
-    'F.eks: Legge opp nye stikkontakter i stue, bytte downlights og oppgradere sikringsskap.',
-
-  rorlegger:
-    'F.eks: Bytte kjøkkenkran, koble opp oppvaskmaskin og legge nye vannrør under vask.',
-
-  entreprenor:
-    'F.eks: Grave ut til garasje, klargjøre tomt og støpe såle.',
-} as const
-
-const DEFAULT_PLACEHOLDER =
-  'F.eks: Beskriv jobben så konkret som mulig, inkludert omfang og arbeid som skal utføres.'
-
-type PlaceholderBedriftstype = keyof typeof PLACEHOLDERS
-
-function normaliserTilPlaceholderNøkkel(fagkategori: string): PlaceholderBedriftstype | null {
-  const k = fagkategori.trim().toLowerCase()
-  if (k === 'rørlegger') return 'rorlegger'
-  if (k === 'entreprenør') return 'entreprenor'
-  if (k in PLACEHOLDERS) return k as PlaceholderBedriftstype
-  return null
-}
-
-function resolveJobbBeskrivelsePlaceholder(fagkategori: string | null | undefined): string {
-  const raw = fagkategori?.trim()
-  if (!raw) return DEFAULT_PLACEHOLDER
-  const key = normaliserTilPlaceholderNøkkel(raw)
-  return key ? PLACEHOLDERS[key] : DEFAULT_PLACEHOLDER
-}
-
 function formatTimer(v: number): string {
   return `${v.toLocaleString('nb-NO')} t`
-}
-
-/** Estimert tid i oversiktskort (forhåndsvisning), ikke i hjulvelger. */
-function formatTimerOversikt(v: number): string {
-  if (v === 1) return '1 time'
-  return `${v.toLocaleString('nb-NO')} timer`
 }
 
 interface Props {
@@ -117,16 +113,17 @@ interface Props {
   onConsumedUtkastKilde?: () => void
 }
 
-function rensMarkdown(tekst: string) {
-  return tekst
-    .replace(/^#{1,6}\s/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\*(.*?)\*/g, '$1')
-}
-
 function erGyldigEpost(epost: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(epost.trim())
 }
+
+/** Kort med fast høyde: skrivefelt over + reelt bunnfelt (delelinje + hjelpetekst), ikke overlapp. */
+const BESKRIVELSE_KORT_HØYDE = 256
+/**
+ * Fast bunnstripe: delelinje + hjelpetekst er `justifyContent: 'flex-end'` så de ligger
+ * nederst i kortet uten å øke korthøyde (unngår at innhold under flyttes ned).
+ */
+const BESKRIVELSE_HELPER_FOOTER_HØYDE = 34
 
 function MetadataDetaljRad({
   label,
@@ -175,6 +172,14 @@ export default function NyttTilbudModal({
   const insets = useSafeAreaInsets()
   const genererKnappScale = useRef(new Animated.Value(1)).current
   const sendKnappScale = useRef(new Animated.Value(1)).current
+  const kundeFerdigScale = useRef(new Animated.Value(1)).current
+  const kundeScrollRef = useRef<ScrollView | null>(null)
+  const recordingDemoRunningRef = useRef(false)
+  const isGeneratingRef = useRef(false)
+  const genererRef = useRef<() => Promise<void>>(async () => {})
+  const sendTilKundeRef = useRef<() => Promise<void>>(async () => {})
+  const åpneKundeSkjemaRef = useRef<() => void>(() => {})
+  const [recordingDemoMode, setRecordingDemoMode] = useState(false)
   const metadataEnter = useRef(new Animated.Value(1)).current
   const previewEnter = useRef(new Animated.Value(1)).current
   const previewSlide = useRef(new Animated.Value(0)).current
@@ -188,8 +193,8 @@ export default function NyttTilbudModal({
   const firmaGrunnlag = firmaFraCache ?? firma
 
   const jobbBeskrivelsePlaceholder = useMemo(
-    () => resolveJobbBeskrivelsePlaceholder(firmaGrunnlag?.fagkategori),
-    [firmaGrunnlag?.fagkategori],
+    () => resolveJobbBeskrivelsePlaceholder(valgtTjeneste, firmaGrunnlag?.fagkategori),
+    [valgtTjeneste, firmaGrunnlag?.fagkategori],
   )
 
   const [kundeNavn, setKundeNavn] = useState('')
@@ -219,6 +224,7 @@ export default function NyttTilbudModal({
   const [generellFeil, setGenerellFeil] = useState('')
 
   const scrollRef = useRef<ScrollView>(null)
+  const previewGeneratedScrollMetricsRef = useRef({ contentH: 0, layoutH: 0 })
   const kundenavnRef = useRef<TextInput>(null)
   const telefonRef = useRef<TextInput>(null)
   const epostRef = useRef<TextInput>(null)
@@ -261,6 +267,7 @@ export default function NyttTilbudModal({
     setGenerellFeil('')
 
     setVisKundeSkjema(false)
+    setRecordingDemoMode(false)
     utkastRadIdRef.current = null
     utkastVersjonRef.current = 1
     utkastHydrertForIdRef.current = null
@@ -282,6 +289,11 @@ export default function NyttTilbudModal({
 
     if (Platform.OS === 'ios') {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    }
+
+    if (jobbBeskrivelse.trim().length === 0) {
+      utførLukkUtenLagring()
+      return
     }
 
     Alert.alert(
@@ -386,10 +398,20 @@ export default function NyttTilbudModal({
   }
 
   useEffect(() => {
-    if (!visKundeSkjema) return
+    if (!visKundeSkjema || recordingDemoMode) return
     const t = setTimeout(() => kundenavnRef.current?.focus(), 350)
     return () => clearTimeout(t)
-  }, [visKundeSkjema])
+  }, [visKundeSkjema, recordingDemoMode])
+
+  useEffect(() => {
+    if (!visible) {
+      previewGeneratedScrollMetricsRef.current = { contentH: 0, layoutH: 0 }
+    }
+  }, [visible])
+
+  useEffect(() => {
+    isGeneratingRef.current = isGenerating
+  }, [isGenerating])
 
   useEffect(() => {
     if (!visible || erGenerert) return
@@ -410,7 +432,7 @@ export default function NyttTilbudModal({
   }
 
   function aktiverRedigering() {
-    setRedigerbarTekst(rensMarkdown(byggForhåndsvisningTekst()))
+    setRedigerbarTekst(rensEnkelMarkdownForRedigering(byggForhåndsvisningTekst()))
     setRedigerModus(true)
   }
 
@@ -420,7 +442,6 @@ export default function NyttTilbudModal({
     return finaliserTilbudTekstSync({
       tilbudTekst: generertTekst,
       kundeNavn: kundeNavn.trim(),
-      prosjektAdresse,
       foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
     })
   }
@@ -631,25 +652,32 @@ export default function NyttTilbudModal({
     setErGenerert(true)
 
     try {
-      const tekst = await genererTilbud({
-        kundeNavn: kundeNavn.trim() || TILBUD_KUNDE_PLASSHOLDER_NAVN,
-        jobbBeskrivelse: byggJobbBeskrivelse(),
-        prisEksMva: estimertPrisEksMva,
-        firmanavn: firmaGrunnlag?.firmanavn ?? '',
-        adresse: firmaGrunnlag?.adresse ?? '',
-        telefon: firmaGrunnlag?.telefon ?? '',
-        epost: firmaGrunnlag?.epost ?? '',
-        tjeneste: valgtTjeneste,
-        fagkategori: firmaGrunnlag?.fagkategori ?? undefined,
-        timer,
-        materialkostnad: materiale,
-        timepris,
-        materialpaslagProsent: matPaslag,
-        dagensdato: new Date().toLocaleDateString('nb-NO'),
-        behandleSomUtkastUtenTekstanalyse: true,
-      })
-      setRåGenerertTekst(tekst)
-      setGenerertTekst(fjernKortLinje(tekst))
+      if (shouldUseStubAiInOfferFlowRecordingDemo() && recordingDemoRunningRef.current) {
+        await sleep(1200)
+        const stub = byggStubTilbudForRecordingDemo(firmaGrunnlag?.firmanavn ?? 'Firma')
+        setRåGenerertTekst(stub)
+        setGenerertTekst(fjernKortLinje(stub))
+      } else {
+        const tekst = await genererTilbud({
+          kundeNavn: kundeNavn.trim() || TILBUD_KUNDE_PLASSHOLDER_NAVN,
+          jobbBeskrivelse: byggJobbBeskrivelse(),
+          prisEksMva: estimertPrisEksMva,
+          firmanavn: firmaGrunnlag?.firmanavn ?? '',
+          adresse: firmaGrunnlag?.adresse ?? '',
+          telefon: firmaGrunnlag?.telefon ?? '',
+          epost: firmaGrunnlag?.epost ?? '',
+          tjeneste: valgtTjeneste,
+          fagkategori: firmaGrunnlag?.fagkategori ?? undefined,
+          timer,
+          materialkostnad: materiale,
+          timepris,
+          materialpaslagProsent: matPaslag,
+          dagensdato: new Date().toLocaleDateString('nb-NO'),
+          behandleSomUtkastUtenTekstanalyse: true,
+        })
+        setRåGenerertTekst(tekst)
+        setGenerertTekst(fjernKortLinje(tekst))
+      }
     } catch {
       setGenerellFeil('Feil ved generering. Prøv igjen.')
       setErGenerert(false)
@@ -660,6 +688,18 @@ export default function NyttTilbudModal({
 
   async function sendTilKunde() {
     if (!generertTekst || !firmaGrunnlag) return
+
+    if (isOfferFlowRecordingDemoEnabled() && offerFlowDemoMockSendOnly()) {
+      setSender(true)
+      await sleep(700)
+      setSender(false)
+      Alert.alert(
+        'Opptaksdemo (simulert sending)',
+        'Ingen e-post ble sendt. Fjern EXPO_PUBLIC_OFFER_FLOW_DEMO_MOCK_SEND for ekte sending, toast og kort i listen.'
+      )
+      utførLukkUtenLagring()
+      return
+    }
 
     if (!kundeNavn.trim()) {
       setGenerellFeil('Fyll inn kundenavn')
@@ -691,7 +731,6 @@ export default function NyttTilbudModal({
       const ferdigTekst = finaliserTilbudTekstSync({
         tilbudTekst: tekstUtenKortlinje,
         kundeNavn: kundeNavn.trim(),
-        prosjektAdresse: prosjektAdresse.trim(),
         foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
       })
       const eksisterendeUtkastId = utkastRadIdRef.current
@@ -752,6 +791,8 @@ export default function NyttTilbudModal({
         generertTekst: ferdigTekst,
         prisEksMva: estimertPrisEksMva,
         tilbudId,
+        firmaTelefon: firmaGrunnlag.telefon,
+        firmaEpost: firmaGrunnlag.epost,
       })
 
       await registrerForsteTilbudSendt({
@@ -761,6 +802,9 @@ export default function NyttTilbudModal({
         versjon: versjonSend,
       })
 
+      if (isOfferFlowRecordingDemoEnabled() && recordingDemoRunningRef.current) {
+        markOfferFlowPostSendDetaljerDemo(tilbudId)
+      }
       onSendt(kundeNavn.trim())
       utførLukkUtenLagring()
     } catch (e) {
@@ -797,11 +841,148 @@ export default function NyttTilbudModal({
 
   function åpneKundeSkjema() {
     setGenerellFeil('')
-    setOppstartDato(prev =>
-      prev === null ? startOfLocalDay(new Date()) : startOfLocalDay(prev)
-    )
     setVisKundeSkjema(true)
   }
+
+  genererRef.current = generer
+  sendTilKundeRef.current = sendTilKunde
+  åpneKundeSkjemaRef.current = åpneKundeSkjema
+
+  useEffect(() => {
+    if (!visible || !isOfferFlowRecordingDemoEnabled()) return
+    if (!consumePendingOfferFlowRecordingDemo()) return
+
+    let avbrutt = false
+    setRecordingDemoMode(true)
+    recordingDemoRunningRef.current = true
+
+    void (async () => {
+      try {
+        Keyboard.dismiss()
+        beskrivelseRef.current?.blur()
+        await sleep(550)
+        if (avbrutt) return
+
+        await typeTextIncremental(setJobbBeskrivelse, OFFER_FLOW_DEMO_JOBB_TEKST, {
+          msPerChar: OFFER_FLOW_DEMO_TYPING_MS_PER_CHAR,
+        })
+        await sleep(480)
+        if (avbrutt) return
+
+        await stepThroughPickerValues(
+          TIMER_VERDIER,
+          timer,
+          OFFER_FLOW_DEMO_TIMER_MÅL,
+          v => {
+            setTimer(v)
+          },
+          OFFER_FLOW_DEMO_WHEEL_STEP_MS
+        )
+        await sleep(380)
+        if (avbrutt) return
+
+        await stepThroughPickerValues(
+          MATERIALE_VERDIER,
+          materiale,
+          OFFER_FLOW_DEMO_MATERIALE_MÅL,
+          v => {
+            setMateriale(v)
+          },
+          OFFER_FLOW_DEMO_WHEEL_STEP_MS
+        )
+        await sleep(520)
+        if (avbrutt) return
+
+        await stagedScrollToY(scrollRef, 380, { steps: 10, stepDelayMs: 190 })
+        await sleep(380)
+        if (avbrutt) return
+
+        await runButtonPressAnimation(genererKnappScale)
+        if (avbrutt) return
+        await sleep(120)
+        await genererRef.current()
+        while (isGeneratingRef.current && !avbrutt) {
+          await sleep(120)
+        }
+        await sleep(600)
+        if (avbrutt) return
+
+        await runButtonPressAnimation(sendKnappScale)
+        if (avbrutt) return
+        await sleep(120)
+        åpneKundeSkjemaRef.current()
+        await sleep(700)
+        if (avbrutt) return
+
+        await stagedScrollToY(kundeScrollRef, 200, { steps: 8, stepDelayMs: 185 })
+        await sleep(320)
+        if (avbrutt) return
+
+        await typeTextIncremental(setKundeNavn, OFFER_FLOW_DEMO_KUNDE_NAVN, { msPerChar: 20 })
+        await sleep(140)
+        await typeTextIncremental(setKundeTelefon, OFFER_FLOW_DEMO_KUNDE_TELEFON, { msPerChar: 14 })
+        await sleep(140)
+        await typeTextIncremental(setKundeEpost, OFFER_FLOW_DEMO_KUNDE_EPOST, { msPerChar: 11 })
+        await sleep(140)
+        await typeTextIncremental(setProsjektAdresse, OFFER_FLOW_DEMO_PROSJEKT_ADRESSE, {
+          msPerChar: 9,
+        })
+        await sleep(420)
+        if (avbrutt) return
+
+        const neste = new Date()
+        neste.setDate(neste.getDate() + 21)
+        setOppstartDato(startOfLocalDay(neste))
+        await sleep(750)
+        if (avbrutt) return
+
+        await runButtonPressAnimation(kundeFerdigScale)
+        if (avbrutt) return
+        await sleep(140)
+        Keyboard.dismiss()
+        setVisKundeSkjema(false)
+        await sleep(750)
+        if (avbrutt) return
+
+        for (let i = 0; i < 45; i++) {
+          const { contentH, layoutH } = previewGeneratedScrollMetricsRef.current
+          if (layoutH > 8 && contentH > 40) break
+          await sleep(40)
+        }
+        const { contentH, layoutH } = previewGeneratedScrollMetricsRef.current
+        scrollRef.current?.scrollTo({ y: 0, animated: false })
+        await sleep(60)
+        if (layoutH < 8) {
+          await stagedScrollToY(scrollRef, 520, { steps: 14, stepDelayMs: 160 })
+        } else {
+          const maxScrollY = Math.max(0, Math.round(contentH - layoutH))
+          if (maxScrollY > 4) {
+            await smoothScrollY(scrollRef, 0, maxScrollY, OFFER_FLOW_DEMO_PREVIEW_SCROLL_MS)
+          }
+        }
+        await sleep(650)
+        if (avbrutt) return
+
+        await runButtonPressAnimation(sendKnappScale)
+        if (avbrutt) return
+        await sleep(160)
+        await sendTilKundeRef.current()
+      } catch (e) {
+        console.warn('[offerFlowRecordingDemo]', e)
+      } finally {
+        recordingDemoRunningRef.current = false
+        if (!avbrutt) setRecordingDemoMode(false)
+      }
+    })()
+
+    return () => {
+      avbrutt = true
+      recordingDemoRunningRef.current = false
+      setRecordingDemoMode(false)
+    }
+    // Kun synlighet som avhengighet — ellers avbrytes skript når timer/materiale endres under demo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible])
 
   const kundeSkjemaKanFerdigstilles =
     !!kundeNavn.trim() &&
@@ -819,18 +1000,15 @@ export default function NyttTilbudModal({
           style={styles.metadataCardTint}
         />
         <View style={styles.metadataCardInner}>
-          <View style={styles.metadataTopRow}>
-            <Text style={styles.metadataTjeneste} numberOfLines={2}>
+          <View style={styles.metadataTopRowSolo}>
+            <Text
+              style={styles.metadataTjeneste}
+              numberOfLines={3}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+            >
               {valgtTjeneste}
             </Text>
-            <View style={styles.metadataTotalCol}>
-              <Text style={styles.metadataTotalBeløp} numberOfLines={1}>
-                {totalInklMva === 0
-                  ? 'Avtales'
-                  : `kr ${totalInklMva.toLocaleString('nb-NO')}`}
-              </Text>
-              <Text style={styles.metadataTotalCaption}>Totalt inkl. mva</Text>
-            </View>
           </View>
           <View style={styles.metadataHairline} />
           <MetadataDetaljRad
@@ -852,9 +1030,24 @@ export default function NyttTilbudModal({
           {timer > 0 ? (
             <MetadataDetaljRad
               label="Estimert tid"
-              verdi={formatTimerOversikt(timer)}
+              verdi={formatTimerOversiktNyttTilbud(timer)}
             />
           ) : null}
+          <View style={styles.metadataTotalEtterTidRad}>
+            <Text style={styles.metadataDetaljLabel}>Totalt inkl. mva</Text>
+            <Animated.Text
+              style={[
+                styles.metadataTotalBeløp,
+                styles.metadataTotalBeløpIRekke,
+                { transform: [{ scale: prisPopScale }] },
+              ]}
+              numberOfLines={1}
+            >
+              {totalInklMva === 0
+                ? 'Avtales'
+                : `kr ${totalInklMva.toLocaleString('nb-NO')}`}
+            </Animated.Text>
+          </View>
           {kundeNavn.trim() ||
           kundeTelefon.trim() ||
           prosjektAdresse.trim() ||
@@ -895,13 +1088,13 @@ export default function NyttTilbudModal({
       allowSwipeDismissal={false}
       onRequestClose={forespørLukkMedUtkastValg}
       onShow={() => {
+        if (consumeSuppressOfferFlowDemoFormFocusOnce()) return
         if (!erGenerert) {
           håndterFormVisning()
         }
       }}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={['top']}>
           <View style={styles.header}>
             <View style={styles.headerTitleAbsoluteWrap} pointerEvents="box-none">
               {erGenerert ? (
@@ -993,50 +1186,67 @@ export default function NyttTilbudModal({
             </TouchableOpacity>
           </View>
 
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.flex}>
             {!erGenerert && (
               <View style={styles.screen}>
-                <ScrollView
-                  ref={scrollRef}
-                  keyboardShouldPersistTaps="handled"
-                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={[
+                <View
+                  style={[
                     styles.content,
                     styles.formContent,
                     { paddingBottom: formFooterClearance + contentBottomPadding },
                   ]}
                 >
                   <View style={styles.formBody}>
-                    <Text style={styles.beskrivelseHelper}>
-                      Beskriv jobben så konkret som mulig for et mer presist tilbud
-                    </Text>
-                    <TextInput
-                      ref={beskrivelseRef}
+                    <View
                       style={[
-                        styles.heroBeskrivelse,
-                        fokusertFelt === 'beskrivelse' && styles.heroBeskrivelseFocused,
+                        styles.heroBeskrivelseYtre,
+                        fokusertFelt === 'beskrivelse' && styles.heroBeskrivelseYtreFocused,
                         feil.jobbBeskrivelse && styles.inputFeil,
                       ]}
-                      placeholder={jobbBeskrivelsePlaceholder}
-                      placeholderTextColor="rgba(255,255,255,0.5)"
-                      value={jobbBeskrivelse}
-                      onChangeText={(v) => {
-                        setJobbBeskrivelse(v)
-                        if (feil.jobbBeskrivelse) {
-                          setFeil(f => ({ ...f, jobbBeskrivelse: undefined }))
-                        }
-                      }}
-                      multiline
-                      scrollEnabled
-                      textAlignVertical="top"
-                      {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                      returnKeyType="done"
-                      blurOnSubmit
-                      onSubmitEditing={() => Keyboard.dismiss()}
-                      onFocus={() => setFokusertFelt('beskrivelse')}
-                      onBlur={() => setFokusertFelt(null)}
-                    />
+                    >
+                      <View style={styles.heroBeskrivelseSkrivOmråde}>
+                        <TextInput
+                          ref={beskrivelseRef}
+                          style={styles.heroBeskrivelse}
+                          placeholder={jobbBeskrivelsePlaceholder}
+                          placeholderTextColor="rgba(255,255,255,0.5)"
+                          value={jobbBeskrivelse}
+                          onChangeText={v => {
+                            setJobbBeskrivelse(v)
+
+                            if (feil.jobbBeskrivelse) {
+                              setFeil(f => ({ ...f, jobbBeskrivelse: undefined }))
+                            }
+                          }}
+                          multiline
+                          scrollEnabled
+                          textAlignVertical="top"
+                          showSoftInputOnFocus={!recordingDemoMode}
+                          {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                          returnKeyType="done"
+                          blurOnSubmit
+                          onSubmitEditing={() => Keyboard.dismiss()}
+                          onFocus={() => setFokusertFelt('beskrivelse')}
+                          onBlur={() => setFokusertFelt(null)}
+                        />
+                      </View>
+                      <View
+                        style={[
+                          styles.beskrivelseHelperFooter,
+                          fokusertFelt === 'beskrivelse' &&
+                            styles.beskrivelseHelperFooterFocused,
+                        ]}
+                      >
+                        <View style={styles.beskrivelseHintSkillelinje} />
+                        <Text
+                          style={styles.beskrivelseHintInne}
+                          numberOfLines={2}
+                        >
+                          Beskriv jobben så konkret som mulig for et mer presist tilbud
+                        </Text>
+                      </View>
+                    </View>
 
                     <View style={styles.prisYtreContainer}>
                       <View style={styles.pickerSection}>
@@ -1051,7 +1261,9 @@ export default function NyttTilbudModal({
                                 selectedValue={timer}
                                 onValueChange={(v) => {
                                   setTimer(Number(v))
-                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  if (!recordingDemoMode) {
+                                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  }
                                 }}
                                 style={styles.nativePicker}
                                 itemStyle={styles.nativePickerItem}
@@ -1067,7 +1279,7 @@ export default function NyttTilbudModal({
                               </Picker>
                             </View>
                             <Text style={styles.pickerHint}>
-                              Velg estimert arbeidstid for prisestimatet.
+                              Velg estimert arbeidstid
                             </Text>
                           </View>
                           <View style={styles.pickerColumnWrap}>
@@ -1076,7 +1288,9 @@ export default function NyttTilbudModal({
                                 selectedValue={materiale}
                                 onValueChange={(v) => {
                                   setMateriale(Number(v))
-                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  if (!recordingDemoMode) {
+                                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  }
                                 }}
                                 style={styles.nativePicker}
                                 itemStyle={styles.nativePickerItem}
@@ -1092,14 +1306,14 @@ export default function NyttTilbudModal({
                               </Picker>
                             </View>
                             <Text style={styles.pickerHint}>
-                              Velg estimert materialkost før mva som grunnlag.
+                              Velg estimert materialkost før Mva
                             </Text>
                           </View>
                         </View>
                       </View>
                     </View>
                   </View>
-                </ScrollView>
+                </View>
 
                 <View
                   style={[
@@ -1332,6 +1546,13 @@ export default function NyttTilbudModal({
                   keyboardShouldPersistTaps="handled"
                   keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                   showsVerticalScrollIndicator={false}
+                  onLayout={e => {
+                    previewGeneratedScrollMetricsRef.current.layoutH =
+                      e.nativeEvent.layout.height
+                  }}
+                  onContentSizeChange={(_, h) => {
+                    previewGeneratedScrollMetricsRef.current.contentH = h
+                  }}
                   contentContainerStyle={[
                     styles.generatedContent,
                     styles.generatedContentCompact,
@@ -1502,6 +1723,7 @@ export default function NyttTilbudModal({
               </View>
             )}
           </View>
+          </TouchableWithoutFeedback>
 
           <Modal
             visible={visKundeSkjema}
@@ -1534,6 +1756,9 @@ export default function NyttTilbudModal({
               </View>
 
               <KeyboardAwareScrollView
+                innerRef={(r: unknown) => {
+                  kundeScrollRef.current = r as ScrollView
+                }}
                 style={styles.kundeModalScroll}
                 contentContainerStyle={styles.kundeModalScrollInnhold}
                 keyboardShouldPersistTaps="handled"
@@ -1555,6 +1780,7 @@ export default function NyttTilbudModal({
                   placeholderTextColor="rgba(255,255,255,0.42)"
                   value={kundeNavn}
                   onChangeText={setKundeNavn}
+                  showSoftInputOnFocus={!recordingDemoMode}
                   autoCapitalize="words"
                   returnKeyType="next"
                   blurOnSubmit={false}
@@ -1572,9 +1798,14 @@ export default function NyttTilbudModal({
                   placeholderTextColor="rgba(255,255,255,0.42)"
                   value={kundeTelefon}
                   onChangeText={setKundeTelefon}
+                  showSoftInputOnFocus={!recordingDemoMode}
                   keyboardType="phone-pad"
-                  textContentType="telephoneNumber"
                   autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  autoComplete="off"
+                  importantForAutofill="no"
+                  {...(Platform.OS === 'ios' ? { textContentType: 'none' as const } : {})}
                   returnKeyType="next"
                   blurOnSubmit={false}
                   onSubmitEditing={() => epostRef.current?.focus()}
@@ -1591,9 +1822,14 @@ export default function NyttTilbudModal({
                   placeholderTextColor="rgba(255,255,255,0.42)"
                   value={kundeEpost}
                   onChangeText={setKundeEpost}
+                  showSoftInputOnFocus={!recordingDemoMode}
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
+                  spellCheck={false}
+                  autoComplete="off"
+                  importantForAutofill="no"
+                  {...(Platform.OS === 'ios' ? { textContentType: 'none' as const } : {})}
                   returnKeyType="next"
                   blurOnSubmit={false}
                   onSubmitEditing={() => prosjektRef.current?.focus()}
@@ -1610,6 +1846,7 @@ export default function NyttTilbudModal({
                   placeholderTextColor="rgba(255,255,255,0.42)"
                   value={prosjektAdresse}
                   onChangeText={setProsjektAdresse}
+                  showSoftInputOnFocus={!recordingDemoMode}
                   autoCapitalize="sentences"
                   returnKeyType="done"
                   onSubmitEditing={() => Keyboard.dismiss()}
@@ -1620,8 +1857,8 @@ export default function NyttTilbudModal({
                   Velg eventuell oppstartdato (valgfritt)
                 </Text>
                 <KundeKontaktKalender
-                  sheetVisible={visKundeSkjema}
-                  selectedDate={oppstartDato ?? startOfLocalDay(new Date())}
+                  visningAnchorDato={oppstartDato ?? startOfLocalDay(new Date())}
+                  markertValgtDato={oppstartDato}
                   onSelectDate={d => setOppstartDato(startOfLocalDay(d))}
                 />
               </KeyboardAwareScrollView>
@@ -1633,45 +1870,46 @@ export default function NyttTilbudModal({
                   { paddingBottom: 10 },
                 ]}
               >
-                <TouchableOpacity
-                  disabled={!kundeSkjemaKanFerdigstilles}
-                  onPress={() => {
-                    if (!kundeSkjemaKanFerdigstilles) return
-                    Keyboard.dismiss()
-                    setVisKundeSkjema(false)
-                  }}
-                  activeOpacity={0.92}
-                >
-                  {kundeSkjemaKanFerdigstilles ? (
-                    <LinearGradient
-                      colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={[
-                        styles.sendKnappPrimary,
-                        styles.kundeModalFerdigKnapp,
-                        styles.kundeModalFerdigGradient,
-                      ]}
-                    >
-                      <Text style={styles.sendTekstPrimary}>Ferdig</Text>
-                    </LinearGradient>
-                  ) : (
-                    <View
-                      style={[
-                        styles.sendKnappPrimary,
-                        styles.kundeModalFerdigKnapp,
-                        styles.kundeModalFerdigDisabled,
-                      ]}
-                    >
-                      <Text style={styles.kundeModalFerdigDisabledTekst}>Ferdig</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
+                <Animated.View style={{ transform: [{ scale: kundeFerdigScale }] }}>
+                  <TouchableOpacity
+                    disabled={!kundeSkjemaKanFerdigstilles}
+                    onPress={() => {
+                      if (!kundeSkjemaKanFerdigstilles) return
+                      Keyboard.dismiss()
+                      setVisKundeSkjema(false)
+                    }}
+                    activeOpacity={0.92}
+                  >
+                    {kundeSkjemaKanFerdigstilles ? (
+                      <LinearGradient
+                        colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={[
+                          styles.sendKnappPrimary,
+                          styles.kundeModalFerdigKnapp,
+                          styles.kundeModalFerdigGradient,
+                        ]}
+                      >
+                        <Text style={styles.sendTekstPrimary}>Ferdig</Text>
+                      </LinearGradient>
+                    ) : (
+                      <View
+                        style={[
+                          styles.sendKnappPrimary,
+                          styles.kundeModalFerdigKnapp,
+                          styles.kundeModalFerdigDisabled,
+                        ]}
+                      >
+                        <Text style={styles.kundeModalFerdigDisabledTekst}>Ferdig</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </Animated.View>
               </View>
             </SafeAreaView>
           </Modal>
         </SafeAreaView>
-      </TouchableWithoutFeedback>
     </Modal>
   )
 }
@@ -1703,6 +1941,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 72,
     pointerEvents: 'box-none',
+    zIndex: 1,
   },
   headerLeftCluster: {
     position: 'absolute',
@@ -1712,7 +1951,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    zIndex: 2,
+    zIndex: 5,
+    elevation: 6,
   },
   headerUtkastRad: {
     flexDirection: 'row',
@@ -1778,7 +2018,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
-    zIndex: 2,
+    zIndex: 5,
+    elevation: 6,
   },
   content: {
     flexGrow: 1,
@@ -1837,7 +2078,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   formBody: {
-    flexGrow: 1,
+    flex: 1,
     paddingBottom: 0,
   },
   seksjonHeader: {
@@ -1916,23 +2157,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#232326',
     borderColor: 'rgba(255,255,255,0.12)',
   },
-  heroBeskrivelse: {
-    height: 204,
-    marginBottom: 10,
+  heroBeskrivelseYtre: {
+    height: BESKRIVELSE_KORT_HØYDE,
+    marginBottom: 9,
+    flexDirection: 'column',
     backgroundColor: '#101012',
     borderRadius: 18,
-    paddingHorizontal: 22,
-    paddingTop: Platform.OS === 'ios' ? 8 : 10,
-    paddingBottom: 18,
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.05)',
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 17,
-    lineHeight: 24,
-    color: '#FFFFFF',
-    textAlignVertical: 'top',
+    overflow: 'hidden',
   },
-  heroBeskrivelseFocused: {
+  heroBeskrivelseYtreFocused: {
     backgroundColor: '#111114',
     borderColor: 'rgba(74,222,128,0.25)',
     shadowColor: '#4ADE80',
@@ -1940,16 +2175,53 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOpacity: 0.06,
   },
-  beskrivelseHelper: {
-    marginBottom: 6,
+  heroBeskrivelseSkrivOmråde: {
+    flex: 1,
+    minHeight: 0,
+  },
+  heroBeskrivelse: {
+    flex: 1,
+    minHeight: 0,
+    alignSelf: 'stretch',
+    width: '100%',
     paddingHorizontal: 22,
+    paddingTop: Platform.OS === 'ios' ? 8 : 10,
+    paddingBottom: 4,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 17,
+    lineHeight: 24,
+    color: '#FFFFFF',
+    textAlignVertical: 'top',
+  },
+  beskrivelseHelperFooter: {
+    height: BESKRIVELSE_HELPER_FOOTER_HØYDE,
+    flexShrink: 0,
+    justifyContent: 'flex-end',
+    paddingTop: 0,
+    paddingBottom: 8,
+    backgroundColor: '#101012',
+  },
+  beskrivelseHelperFooterFocused: {
+    backgroundColor: '#111114',
+  },
+  beskrivelseHintSkillelinje: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: 22,
+    marginBottom: 4,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  beskrivelseHintInne: {
+    paddingHorizontal: 22,
+    paddingTop: 0,
     fontFamily: 'DMSans_400Regular',
     fontSize: 12,
     lineHeight: 19,
     color: 'rgba(255,255,255,0.55)',
   },
   prisYtreContainer: {
-    marginTop: 9,
+    marginTop: 8,
     paddingTop: 0,
     paddingBottom: 40,
     marginBottom: 0,
@@ -2492,35 +2764,40 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 10,
   },
-  metadataTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+  metadataTopRowSolo: {
+    marginBottom: 2,
+    width: '100%',
+    minWidth: 0,
   },
   metadataTjeneste: {
-    flex: 1,
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 17,
-    lineHeight: 22,
+    width: '100%',
+    minWidth: 0,
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: -0.35,
     color: '#E8ECF2',
-    paddingRight: 4,
-  },
-  metadataTotalCol: {
-    alignItems: 'flex-end',
-    maxWidth: '48%',
-  },
-  metadataTotalCaption: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.45)',
-    marginTop: 3,
   },
   metadataTotalBeløp: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 20,
     letterSpacing: -0.3,
     color: '#FFFFFF',
+  },
+  metadataTotalBeløpIRekke: {
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  metadataTotalEtterTidRad: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 4,
+    marginBottom: 2,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
   },
   metadataHairline: {
     height: 1,

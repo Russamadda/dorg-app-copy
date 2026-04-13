@@ -36,32 +36,35 @@ function førsteDagMandagBasis(år: number, måned: number): number {
 }
 
 type Props = {
-  sheetVisible: boolean
-  selectedDate: Date
+  /** Styrer hvilket år/måned rutenettet viser (f.eks. i dag når ingen dato er valgt). */
+  visningAnchorDato: Date
+  /** Når satt, får denne dagen «valgt»-stil. `null` = ingen dag ser valgt ut (i dag vises kun som «i dag»). */
+  markertValgtDato: Date | null
   onSelectDate: (d: Date) => void
 }
 
 export function KundeKontaktKalender({
-  sheetVisible,
-  selectedDate,
+  visningAnchorDato,
+  markertValgtDato,
   onSelectDate,
 }: Props) {
   const iDag = useMemo(() => startOfLocalDay(new Date()), [])
-  const valgt = useMemo(() => startOfLocalDay(selectedDate), [selectedDate])
+  const valgtNormalisert = useMemo(
+    () => (markertValgtDato ? startOfLocalDay(markertValgtDato) : null),
+    [markertValgtDato],
+  )
+  const cursorKilde = useMemo(
+    () => startOfLocalDay(visningAnchorDato),
+    [visningAnchorDato],
+  )
 
-  const [cursorÅr, setCursorÅr] = useState(valgt.getFullYear())
-  const [cursorMåned, setCursorMåned] = useState(valgt.getMonth())
-  const [brukerHarValgtDag, setBrukerHarValgtDag] = useState(false)
+  const [cursorÅr, setCursorÅr] = useState(cursorKilde.getFullYear())
+  const [cursorMåned, setCursorMåned] = useState(cursorKilde.getMonth())
 
   useEffect(() => {
-    if (!sheetVisible) return
-    setBrukerHarValgtDag(false)
-  }, [sheetVisible])
-
-  useEffect(() => {
-    setCursorÅr(valgt.getFullYear())
-    setCursorMåned(valgt.getMonth())
-  }, [valgt])
+    setCursorÅr(cursorKilde.getFullYear())
+    setCursorMåned(cursorKilde.getMonth())
+  }, [cursorKilde])
 
   const månedTittel = useMemo(() => {
     const d = new Date(cursorÅr, cursorMåned, 1)
@@ -120,7 +123,6 @@ export function KundeKontaktKalender({
   const velgDag = useCallback(
     (dato: Date) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-      setBrukerHarValgtDag(true)
       onSelectDate(dato)
     },
     [onSelectDate]
@@ -162,7 +164,7 @@ export function KundeKontaktKalender({
             {rutenett.slice(rad * 7, rad * 7 + 7).map((c, kol) => {
               const idx = rad * 7 + kol
               const erMedUtvalg =
-                brukerHarValgtDag && sammeDag(c.dato, valgt)
+                valgtNormalisert !== null && sammeDag(c.dato, valgtNormalisert)
               const erIDag = sammeDag(c.dato, iDag)
               const celleStyle: ViewStyle[] = [styles.dagCelle]
               if (!c.iMåned) celleStyle.push(styles.dagUtenfor)

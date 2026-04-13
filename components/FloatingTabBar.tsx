@@ -102,8 +102,9 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   )
 
   const onFabPress = useCallback(() => {
-    fabEmitter.emit()
-  }, [])
+    const aktiv = state.routes[state.index]
+    fabEmitter.emit(aktiv?.name)
+  }, [state.index, state.routes])
 
   const onPressVenstre = useCallback(() => {
     if (leftRouteIndex !== -1) {

@@ -336,7 +336,33 @@ DETTE ER INKLUDERT
 
 
 
-2-4 konkrete punkter. Kun faktisk arbeid.
+3-5 konkrete punkter før tidslinjen, avhengig av jobbens omfang.
+
+Siste punkt alltid: "Estimert tid: [X] timer"
+
+
+
+Listen skal dekke faktisk arbeid OG viktige praktiske
+
+utførelsesdetaljer som kunden eksplisitt har nevnt —
+
+f.eks. koordinering mot andre fag (elektriker, rørlegger),
+
+tilpasning mot eksisterende løsninger, demontering som
+
+forutsetning, eller avklaringer som direkte påvirker utførelsen.
+
+
+
+IKKE utelat slike detaljer for å holde listen kort.
+
+Velg "Dette er inkludert:" når det er en del av leveransen/
+
+utførelsen, og "Viktig å merke seg:" når det hovedsakelig
+
+handler om usikkerhet, risiko eller behov for avklaring —
+
+men dropp dem aldri helt hvis kunden har sagt det tydelig.
 
 
 
@@ -370,19 +396,45 @@ Godt: "Montering av ny 200 liters bereder"
 
 Godt: "To strøk maling, innvendig, ca. 80 kvm"
 
+Godt: "Koordinering mot elektriker og rørlegger ved behov"
 
 
-Aldri:
+
+EKSEMPEL — bevar praktisk koordinering:
+
+Jobbeskrivelse inneholder bl.a.:
+
+"Oppussing av bad på ca. 8 kvm, inkludert riving av eksisterende
+
+overflater, klargjøring for nye vegg- og gulvløsninger, montering
+
+av baderomsmøbel, dusjløsning og nye innredningsdetaljer.
+
+Koordinering mot elektriker og rørlegger må påregnes der det er nødvendig."
+
+
+
+Da kan "Dette er inkludert:" f.eks. være:
+
+- Riving av eksisterende overflater
+
+- Klargjøring for nye vegg- og gulvløsninger
+
+- Montering av baderomsmøbel og dusjløsning
+
+- Koordinering mot elektriker og rørlegger ved behov
+
+- Estimert tid: [X] timer
+
+
+
+Aldri generisk fyll, f.eks.:
 
 - "Profesjonell utførelse" ✗
 
 - "Ryddig arbeidsplass" ✗
 
 - "Test og kontroll" ✗
-
-
-
-Siste punkt alltid: "Estimert tid: [X] timer"
 
 
 

@@ -30,12 +30,11 @@ import {
 import { getCachedFirma, setCachedFirma } from '../../lib/firmaCache'
 import { fabEmitter } from '../../lib/fabEmitter'
 import type { Forespørsel, Firma } from '../../types'
-import TopBar from '../../components/TopBar'
+import TopBar, { getTopBarOuterHeight } from '../../components/TopBar'
 import ForespørselKort from '../../components/ForespørselKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
 import ToastMessage from '../../components/ToastMessage'
 import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
-import AppBackground from '../../components/AppBackground'
 
 type FilterKey = 'alle' | 'avventer' | 'utkast'
 
@@ -140,9 +139,18 @@ export default function ForespørslerScreen() {
       }
 
       void lastData()
-      return fabEmitter.on(() => tilbudFlyt.fabTrykket())
-    }, [lastData, tilbudFlyt.fabTrykket])
+    }, [lastData])
   )
+
+  // Ikke bruk useFocusEffect til FAB: RN Modal (nytt tilbud) kan trigge blur → cleanup
+  // fjerner lytteren mens skjermen fortsatt er «Forespørsler», og FAB virker død etter lukking.
+  useEffect(() => {
+    return fabEmitter.on(aktivRute => {
+      if (aktivRute === 'index') {
+        tilbudFlyt.fabTrykket()
+      }
+    })
+  }, [tilbudFlyt.fabTrykket])
 
   function onRefresh() {
     setOppdaterer(true)
@@ -251,33 +259,42 @@ export default function ForespørslerScreen() {
   const listHeader = useMemo(
     () => (
       <>
-        <View style={styles.scrollMetaSection}>
-          <Text style={styles.subtitle}>{avventer} AVVENTER GODKJENNING</Text>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>Forespørsler</Text>
+          <View style={styles.subtitleIndent}>
+            <Text style={styles.subtitle}>{avventer} AVVENTER GODKJENNING</Text>
+          </View>
         </View>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterRow}
-          style={styles.filterScroller}
-        >
-          {FILTRE.map(filter => {
-            const aktiv = aktivFilter === filter.key
+        <View style={styles.filterSection}>
+          <View style={styles.filterRow}>
+            {FILTRE.map(filter => {
+              const aktiv = aktivFilter === filter.key
 
-            return (
-              <TouchableOpacity
-                key={filter.key}
-                style={[styles.filterChip, aktiv ? styles.filterChipActive : styles.filterChipInactive]}
-                onPress={() => setAktivFilter(filter.key)}
-                activeOpacity={0.86}
-              >
-                <Text style={[styles.filterText, aktiv ? styles.filterTextActive : styles.filterTextInactive]}>
-                  {filter.label}
-                </Text>
-              </TouchableOpacity>
-            )
-          })}
-        </ScrollView>
+              return (
+                <View key={filter.key} style={styles.filterPillWrap}>
+                  <TouchableOpacity
+                    style={[
+                      styles.filterPill,
+                      aktiv ? styles.filterPillActive : styles.filterPillInactive,
+                    ]}
+                    onPress={() => setAktivFilter(filter.key)}
+                    activeOpacity={0.86}
+                  >
+                    <Text
+                      style={[
+                        styles.filterText,
+                        aktiv ? styles.filterTextActive : styles.filterTextInactive,
+                      ]}
+                    >
+                      {filter.label}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )
+            })}
+          </View>
+        </View>
       </>
     ),
     [aktivFilter, avventer]
@@ -285,103 +302,121 @@ export default function ForespørslerScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <AppBackground />
-      <View style={styles.header}>
-        <View pointerEvents="none" style={styles.headerFrost}>
-          <BlurView
-            intensity={72}
-            tint="light"
-            experimentalBlurMethod="dimezisBlurView"
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.headerTint} />
-        </View>
-
-        <TopBar />
-        <View style={[styles.titleSection, { paddingTop: insets.top + 58 }]}>
-          <Text style={styles.title}>Forespørsler</Text>
-        </View>
-      </View>
-
-      <ToastMessage
-        message={toast.message}
-        visible={toast.visible}
-        onHide={() => setToast(t => ({ ...t, visible: false }))}
-      />
-
-      {laster ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#111111" style={styles.spinner} size="large" />
-        </View>
-      ) : (
-        <SwipeListView
-          data={swipeData}
-          keyExtractor={item => item.rowKey}
-          renderItem={renderItem}
-          renderHiddenItem={renderHiddenItem}
-          ListHeaderComponent={listHeader}
-          ListEmptyComponent={<TomTilstand />}
-          contentContainerStyle={[
-            styles.listContent,
-            {
-              paddingTop: insets.top + 96,
-              paddingBottom: getFloatingTabBarPadding(insets.bottom),
-            },
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={oppdaterer}
-              onRefresh={onRefresh}
-              tintColor="#111111"
+        <View style={styles.header}>
+          <View pointerEvents="none" style={styles.headerFrost}>
+            <BlurView
+              intensity={72}
+              tint="light"
+              experimentalBlurMethod="dimezisBlurView"
+              style={StyleSheet.absoluteFill}
             />
-          }
-          leftOpenValue={SWIPE_OPEN_VALUE}
-          rightOpenValue={DELETE_OPEN_VALUE}
-          stopLeftSwipe={SWIPE_OPEN_VALUE}
-          stopRightSwipe={DELETE_OPEN_VALUE}
-          swipeToOpenPercent={SWIPE_TO_OPEN_PERCENT}
-          swipeToClosePercent={SWIPE_TO_CLOSE_PERCENT}
-          directionalDistanceChangeThreshold={DIRECTION_THRESHOLD}
-          closeOnScroll
-          closeOnRowPress
-          closeOnRowOpen
-          closeOnRowBeginSwipe
-          disableLeftSwipe={false}
-          disableRightSwipe
-          recalculateHiddenLayout
-          onRowDidOpen={håndterRowDidOpen}
-          showsVerticalScrollIndicator={false}
-          useFlatList
-          swipeRowStyle={styles.swipeRow}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={10}
-          updateCellsBatchingPeriod={50}
-        />
-      )}
+            <View style={styles.headerTint} />
+          </View>
 
-      {tilbudFlyt.valgtTjeneste != null ? (
-        <NyttTilbudModal
-          visible={tilbudFlyt.visNyttTilbudModal}
-          onClose={tilbudFlyt.lukkModal}
-          firma={firma}
-          valgtTjeneste={tilbudFlyt.valgtTjeneste}
-          onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
-          utkastKilde={tilbudFlyt.utkastKilde}
-          onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
-          onSendt={navn => {
-            lastData()
-            setToast({ visible: true, message: `Tilbud sendt til ${navn}` })
-          }}
+          <TopBar absolute={false} />
+        </View>
+
+        <ToastMessage
+          message={toast.message}
+          visible={toast.visible}
+          onHide={() => setToast(t => ({ ...t, visible: false }))}
         />
-      ) : null}
-      <TjenesteSelectorSheet
-        visible={tilbudFlyt.visTjenesteSheet}
-        onClose={tilbudFlyt.lukkTjenesteSheet}
-        jobbtyper={jobbtyperListe}
-        valgtTjeneste={tilbudFlyt.valgtTjeneste}
-        onSelect={tilbudFlyt.onTjenesteValgt}
-      />
+
+        <View style={styles.body}>
+          {laster ? (
+            <ScrollView
+              style={styles.listFlex}
+              contentContainerStyle={[
+                styles.listContent,
+                {
+                  paddingTop: getTopBarOuterHeight(insets.top),
+                  paddingBottom: getFloatingTabBarPadding(insets.bottom),
+                  flexGrow: 1,
+                },
+              ]}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.titleBlock}>
+                <Text style={styles.title}>Forespørsler</Text>
+                <View style={styles.subtitleIndent}>
+                  <Text style={styles.subtitle}>{avventer} AVVENTER GODKJENNING</Text>
+                </View>
+              </View>
+              <View style={styles.loadingWrap}>
+                <ActivityIndicator color="#111111" style={styles.spinner} size="large" />
+              </View>
+            </ScrollView>
+          ) : (
+            <SwipeListView
+              style={styles.listFlex}
+              data={swipeData}
+              keyExtractor={item => item.rowKey}
+              renderItem={renderItem}
+              renderHiddenItem={renderHiddenItem}
+              ListHeaderComponent={listHeader}
+              ListEmptyComponent={<TomTilstand />}
+              contentContainerStyle={[
+                styles.listContent,
+                {
+                  paddingTop: getTopBarOuterHeight(insets.top),
+                  paddingBottom: getFloatingTabBarPadding(insets.bottom),
+                },
+              ]}
+            refreshControl={
+              <RefreshControl
+                refreshing={oppdaterer}
+                onRefresh={onRefresh}
+                tintColor="#111111"
+              />
+            }
+            leftOpenValue={SWIPE_OPEN_VALUE}
+            rightOpenValue={DELETE_OPEN_VALUE}
+            stopLeftSwipe={SWIPE_OPEN_VALUE}
+            stopRightSwipe={DELETE_OPEN_VALUE}
+            swipeToOpenPercent={SWIPE_TO_OPEN_PERCENT}
+            swipeToClosePercent={SWIPE_TO_CLOSE_PERCENT}
+            directionalDistanceChangeThreshold={DIRECTION_THRESHOLD}
+            closeOnScroll
+            closeOnRowPress
+            closeOnRowOpen
+            closeOnRowBeginSwipe
+            disableLeftSwipe={false}
+            disableRightSwipe
+            recalculateHiddenLayout
+            onRowDidOpen={håndterRowDidOpen}
+            showsVerticalScrollIndicator={false}
+            useFlatList
+            swipeRowStyle={styles.swipeRow}
+            initialNumToRender={10}
+            maxToRenderPerBatch={10}
+            windowSize={10}
+            updateCellsBatchingPeriod={50}
+            />
+          )}
+        </View>
+
+        {tilbudFlyt.valgtTjeneste != null ? (
+          <NyttTilbudModal
+            visible={tilbudFlyt.visNyttTilbudModal}
+            onClose={tilbudFlyt.lukkModal}
+            firma={firma}
+            valgtTjeneste={tilbudFlyt.valgtTjeneste}
+            onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
+            utkastKilde={tilbudFlyt.utkastKilde}
+            onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
+            onSendt={navn => {
+              lastData()
+              setToast({ visible: true, message: `Tilbud sendt til ${navn}` })
+            }}
+          />
+        ) : null}
+        <TjenesteSelectorSheet
+          visible={tilbudFlyt.visTjenesteSheet}
+          onClose={tilbudFlyt.lukkTjenesteSheet}
+          jobbtyper={jobbtyperListe}
+          valgtTjeneste={tilbudFlyt.valgtTjeneste}
+          onSelect={tilbudFlyt.onTjenesteValgt}
+        />
     </SafeAreaView>
   )
 }
@@ -399,7 +434,13 @@ function TomTilstand() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EEF1F6',
+    backgroundColor: 'transparent',
+  },
+  body: {
+    flex: 1,
+  },
+  listFlex: {
+    flex: 1,
   },
   header: {
     position: 'absolute',
@@ -409,8 +450,8 @@ const styles = StyleSheet.create({
     zIndex: 10,
     paddingBottom: 0,
     backgroundColor: 'transparent',
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
     overflow: 'hidden',
   },
   headerFrost: {
@@ -420,46 +461,50 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(238,241,246,0.1)',
   },
-  titleSection: {
-    paddingHorizontal: 20,
-    paddingBottom: 0,
+  titleBlock: {
+    marginTop: 12,
+  },
+  subtitleIndent: {
+    marginTop: 4,
+    paddingLeft: 8,
   },
   title: {
+    paddingLeft: 4,
     fontSize: 28,
     lineHeight: 32,
     fontFamily: 'DMSans_700Bold',
     color: '#111111',
   },
   subtitle: {
-    marginTop: 4,
-    fontSize: 12,
-    lineHeight: 16,
-    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
     color: '#888888',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
   },
-  scrollMetaSection: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  filterScroller: {
+  filterSection: {
     marginTop: 10,
-    marginBottom: 8,
+    marginBottom: 16,
   },
   filterRow: {
-    paddingHorizontal: 16,
-    gap: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingLeft: 2,
   },
-  filterChip: {
+  filterPillWrap: {
+    position: 'relative',
+  },
+  filterPill: {
+    height: 32,
     borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  filterChipActive: {
+  filterPillActive: {
     backgroundColor: '#111111',
   },
-  filterChipInactive: {
+  filterPillInactive: {
     backgroundColor: '#FFFFFF',
     shadowColor: '#B0BAC8',
     shadowOffset: { width: 0, height: 2 },
@@ -468,7 +513,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 13,
   },
   filterTextActive: {
     fontFamily: 'DMSans_500Medium',

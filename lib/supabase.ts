@@ -829,6 +829,7 @@ export async function hentSendteTilbud(firmaId: string): Promise<Forespørsel[]>
     .select('*')
     .eq('firma_id', firmaId)
     .neq('status', 'utkast')
+    .order('sist_sendt_dato', { ascending: false, nullsFirst: false })
     .order('opprettet_dato', { ascending: false })
 
   if (error) throw new Error(error.message)

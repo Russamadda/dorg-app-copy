@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   RefreshControl,
+  ScrollView,
   View,
   LayoutAnimation,
   Platform,
@@ -33,15 +34,30 @@ import { fabEmitter } from '../../lib/fabEmitter'
 import { oppdaterBadge } from '../../lib/notificationState'
 import { beregnTilbudTotalInklMva } from '../../lib/tilbudPris'
 import { prefetchTilbudHendelser } from '../../lib/tilbudHendelserCache'
+import { sorterTilbudForSendtListe } from '../../lib/tilbudListeSortering'
 import type { Forespørsel, Firma } from '../../types'
 import NotificationBadge from '../../components/NotificationBadge'
-import TopBar from '../../components/TopBar'
+import TopBar, { getTopBarOuterHeight } from '../../components/TopBar'
 import TilbudKort from '../../components/TilbudKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
 import TilbudDetaljerModal from '../../components/TilbudDetaljerModal'
 import { Toast } from '../../components/Toast'
 import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
-import AppBackground from '../../components/AppBackground'
+import {
+  consumeOfferFlowPostSendDetaljerDemo,
+  registerOfferFlowDemoTilbudOpenHandler,
+} from '../../lib/demoRecording/offerFlowDemoBus'
+import {
+  OFFER_FLOW_DEMO_MODAL_OPEN_DELAY_MS,
+  OFFER_FLOW_DEMO_POST_SEND_KORT_PAUSE_MS,
+  OFFER_FLOW_DEMO_POST_SEND_KORT_PULS_MS,
+  OFFER_FLOW_DEMO_TJENESTE,
+  OFFER_FLOW_DEMO_TJENESTE_HIGHLIGHT_MS,
+  OFFER_FLOW_DEMO_TJENESTE_SHEET_PAUSE_MS,
+  OFFER_FLOW_DEMO_TJENESTE_TRYKK_PAUSE_MS,
+} from '../../lib/demoRecording/offerFlowDemoConfig'
+import { isOfferFlowRecordingDemoEnabled } from '../../lib/demoRecording/offerFlowDemoFlags'
+import { sleep } from '../../lib/demoRecording/offerFlowDemoPrimitives'
 
 type FilterLabel = 'Sendt' | 'Justering' | 'Godkjent' | 'Alle'
 
@@ -87,32 +103,18 @@ const listAnimationConfig = {
   },
 }
 
-function sorterTilbud(a: Forespørsel, b: Forespørsel) {
-  const erAvsluttet = (status: Forespørsel['status']) =>
-    status === 'godkjent' || status === 'utfort' || status === 'avslatt'
-
-  const aAvsluttet = erAvsluttet(a.status)
-  const bAvsluttet = erAvsluttet(b.status)
-
-  if (aAvsluttet !== bAvsluttet) {
-    return aAvsluttet ? 1 : -1
-  }
-
-  return new Date(b.opprettetDato).getTime() - new Date(a.opprettetDato).getTime()
-}
-
 function filtrerTilbudEtterValgtFilter(liste: Forespørsel[], filter: FilterLabel) {
   const aktivtFilter = filterStatuser[filter]
 
   if (!aktivtFilter) {
-    return [...liste].sort(sorterTilbud)
+    return [...liste].sort(sorterTilbudForSendtListe)
   }
 
   if (Array.isArray(aktivtFilter)) {
-    return liste.filter(item => aktivtFilter.includes(item.status)).sort(sorterTilbud)
+    return liste.filter(item => aktivtFilter.includes(item.status)).sort(sorterTilbudForSendtListe)
   }
 
-  return liste.filter(item => item.status === aktivtFilter).sort(sorterTilbud)
+  return liste.filter(item => item.status === aktivtFilter).sort(sorterTilbudForSendtListe)
 }
 
 function animateListChange() {
@@ -143,6 +145,16 @@ export default function TilbudScreen() {
   const [fokusNudgeVersjon, setFokusNudgeVersjon] = useState(0)
   const tilbudFlyt = useNyttTilbudFlyt()
   const jobbtyperListe = useMemo(() => hentTilbudJobbtyper(firma), [firma])
+  const [opptaksDemoAutoVelg, setOpptaksDemoAutoVelg] = useState<{
+    tjeneste: string
+    utsettMs: number
+    pauseEtterScrollMs?: number
+    highlightFørLukkMs?: number
+  } | null>(null)
+  const velgKommerFraDemoOpptakRef = useRef(false)
+  const [opptaksPostSendVentPåKortId, setOpptaksPostSendVentPåKortId] = useState<string | null>(null)
+  const [opptaksDemoKortPulseId, setOpptaksDemoKortPulseId] = useState<string | null>(null)
+  const [opptaksDetaljerDemoscroll, setOpptaksDetaljerDemoscroll] = useState(false)
   const [valgtTilbud, setValgtTilbud] = useState<Forespørsel | null>(null)
   const [toast, setToast] = useState<{
     synlig: boolean
@@ -195,17 +207,55 @@ export default function TilbudScreen() {
         setFirma(cachedFirma)
       }
 
-      const unsubscribeFab = fabEmitter.on(() => tilbudFlyt.fabTrykket())
-
       setFokusNudgeVersjon(prev => prev + 1)
       hentTilbud()
 
       return () => {
         nudgeAnim.stopAnimation()
         nudgeAnim.setValue(0)
-        unsubscribeFab()
       }
-    }, [hentTilbud, nudgeAnim, tilbudFlyt.fabTrykket])
+    }, [hentTilbud, nudgeAnim])
+  )
+
+  useEffect(() => {
+    return fabEmitter.on(aktivRute => {
+      if (aktivRute === 'tilbud') {
+        tilbudFlyt.fabTrykket()
+      }
+    })
+  }, [tilbudFlyt.fabTrykket])
+
+  useEffect(() => {
+    if (!isOfferFlowRecordingDemoEnabled()) return
+    return registerOfferFlowDemoTilbudOpenHandler(() => {
+      tilbudFlyt.fabTrykket()
+      setOpptaksDemoAutoVelg({
+        tjeneste: OFFER_FLOW_DEMO_TJENESTE,
+        utsettMs: OFFER_FLOW_DEMO_TJENESTE_SHEET_PAUSE_MS,
+        pauseEtterScrollMs: OFFER_FLOW_DEMO_TJENESTE_TRYKK_PAUSE_MS,
+        highlightFørLukkMs: OFFER_FLOW_DEMO_TJENESTE_HIGHLIGHT_MS,
+      })
+    })
+  }, [tilbudFlyt.fabTrykket])
+
+  const håndterOpptaksDetaljerDemoScrollFerdig = useCallback(() => {
+    setOpptaksDetaljerDemoscroll(false)
+  }, [])
+
+  const håndterTjenesteSheetVelg = useCallback(
+    (tjeneste: string) => {
+      const fraDemoOpptak = velgKommerFraDemoOpptakRef.current
+      velgKommerFraDemoOpptakRef.current = false
+      setOpptaksDemoAutoVelg(null)
+      if (fraDemoOpptak) {
+        setTimeout(() => {
+          tilbudFlyt.onTjenesteValgt(tjeneste)
+        }, OFFER_FLOW_DEMO_MODAL_OPEN_DELAY_MS)
+      } else {
+        tilbudFlyt.onTjenesteValgt(tjeneste)
+      }
+    },
+    [tilbudFlyt.onTjenesteValgt]
   )
 
   const håndterSlettTilbud = useCallback(
@@ -233,7 +283,7 @@ export default function TilbudScreen() {
   }, [aktivFilter, skjulteTilbudIds, tilbud])
 
   const tilbudListe = useMemo(
-    () => tilbud.filter(item => !skjulteTilbudIds.includes(item.id)).sort(sorterTilbud),
+    () => tilbud.filter(item => !skjulteTilbudIds.includes(item.id)).sort(sorterTilbudForSendtListe),
     [skjulteTilbudIds, tilbud]
   )
 
@@ -353,6 +403,41 @@ export default function TilbudScreen() {
   )
 
   useEffect(() => {
+    if (!opptaksPostSendVentPåKortId) return
+    const targetId = opptaksPostSendVentPåKortId
+    let avbrutt = false
+
+    void (async () => {
+      let rad: Forespørsel | undefined
+      for (let i = 0; i < 80; i++) {
+        if (avbrutt) return
+        rad = tilbudRef.current.find(t => t.id === targetId)
+        if (rad) break
+        await sleep(50)
+      }
+      if (avbrutt) return
+      if (!rad) {
+        setOpptaksPostSendVentPåKortId(null)
+        return
+      }
+
+      await sleep(OFFER_FLOW_DEMO_POST_SEND_KORT_PAUSE_MS)
+      if (avbrutt) return
+      setOpptaksDemoKortPulseId(targetId)
+      await sleep(OFFER_FLOW_DEMO_POST_SEND_KORT_PULS_MS)
+      if (avbrutt) return
+      setOpptaksPostSendVentPåKortId(null)
+      setOpptaksDemoKortPulseId(null)
+      await åpneTilbud(rad)
+      setOpptaksDetaljerDemoscroll(true)
+    })()
+
+    return () => {
+      avbrutt = true
+    }
+  }, [opptaksPostSendVentPåKortId, åpneTilbud])
+
+  useEffect(() => {
     const kandidater = tilbud
       .filter(t => t.status === 'godkjent' || t.status === 'justering')
       .slice(0, 12)
@@ -450,7 +535,11 @@ export default function TilbudScreen() {
               : null,
           ]}
         >
-          <TilbudKort tilbud={item} onPress={t => void åpneTilbud(t)} />
+          <TilbudKort
+            tilbud={item}
+            opptaksDemoTrykkPulse={item.id === opptaksDemoKortPulseId}
+            onPress={t => void åpneTilbud(t)}
+          />
         </Animated.View>
       )
     },
@@ -479,45 +568,50 @@ export default function TilbudScreen() {
 
   const listHeader = useMemo(
     () => (
-      <View style={styles.filterSection}>
-        <View style={styles.summaryBlock}>
-          <Text style={styles.summary}>{oppsummering}</Text>
+      <>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>Sendte tilbud</Text>
+          <View style={styles.subtitleIndent}>
+            <Text style={styles.subtitle}>{oppsummering}</Text>
+          </View>
         </View>
 
-        <View style={styles.filterRow}>
-          {FILTRE.map(filter => {
-            const badgeCount =
-              filter === 'Justering'
-                ? antallJustering
-                : filter === 'Godkjent'
-                  ? antallGodkjent
-                  : undefined
+        <View style={styles.filterSection}>
+          <View style={styles.filterRow}>
+            {FILTRE.map(filter => {
+              const badgeCount =
+                filter === 'Justering'
+                  ? antallJustering
+                  : filter === 'Godkjent'
+                    ? antallGodkjent
+                    : undefined
 
-            return (
-              <View key={filter} style={styles.filterPillWrap}>
-                <TouchableOpacity
-                  style={[
-                    styles.filterPill,
-                    aktivFilter === filter ? styles.filterPillActive : styles.filterPillInactive,
-                  ]}
-                  onPress={() => setAktivFilter(filter)}
-                  activeOpacity={0.86}
-                >
-                  <Text
+              return (
+                <View key={filter} style={styles.filterPillWrap}>
+                  <TouchableOpacity
                     style={[
-                      styles.filterText,
-                      aktivFilter === filter ? styles.filterTextActive : styles.filterTextInactive,
+                      styles.filterPill,
+                      aktivFilter === filter ? styles.filterPillActive : styles.filterPillInactive,
                     ]}
+                    onPress={() => setAktivFilter(filter)}
+                    activeOpacity={0.86}
                   >
-                    {filter}
-                  </Text>
-                </TouchableOpacity>
-                {badgeCount !== undefined ? <NotificationBadge count={badgeCount} /> : null}
-              </View>
-            )
-          })}
+                    <Text
+                      style={[
+                        styles.filterText,
+                        aktivFilter === filter ? styles.filterTextActive : styles.filterTextInactive,
+                      ]}
+                    >
+                      {filter}
+                    </Text>
+                  </TouchableOpacity>
+                  {badgeCount !== undefined ? <NotificationBadge count={badgeCount} /> : null}
+                </View>
+              )
+            })}
+          </View>
         </View>
-      </View>
+      </>
     ),
     [aktivFilter, antallGodkjent, antallJustering, oppsummering]
   )
@@ -536,126 +630,156 @@ export default function TilbudScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <AppBackground />
-      <View style={styles.header}>
-        <View pointerEvents="none" style={styles.headerFrost}>
-          <BlurView
-            intensity={72}
-            tint="light"
-            experimentalBlurMethod="dimezisBlurView"
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.headerTint} />
-        </View>
-
-        <TopBar />
-
-        <View style={[styles.titleSection, { paddingTop: insets.top + 58 }]}>
-          <Text style={styles.title}>Sendte tilbud</Text>
-        </View>
-      </View>
-
-      <Toast
-        melding={toast.melding}
-        type={toast.type}
-        synlig={toast.synlig}
-        onHide={() => setToast(prev => ({ ...prev, synlig: false }))}
-      />
-
-      {laster ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#111111" style={styles.spinner} size="large" />
-        </View>
-      ) : (
-        <SwipeListView
-          data={swipeData}
-          keyExtractor={item => item.rowKey}
-          renderItem={renderItem}
-          renderHiddenItem={renderHiddenItem}
-          ListHeaderComponent={listHeader}
-          ListFooterComponent={listFooter}
-          ListEmptyComponent={<TomTilstand />}
-          contentContainerStyle={[
-            styles.listContent,
-            {
-              paddingTop: insets.top + 96,
-              paddingBottom: getFloatingTabBarPadding(insets.bottom),
-            },
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refresher}
-              onRefresh={async () => {
-                setRefresher(true)
-                await hentTilbud()
-                setRefresher(false)
-              }}
-              tintColor="#111111"
+        <View style={styles.header}>
+          <View pointerEvents="none" style={styles.headerFrost}>
+            <BlurView
+              intensity={72}
+              tint="light"
+              experimentalBlurMethod="dimezisBlurView"
+              style={StyleSheet.absoluteFill}
             />
-          }
-          leftOpenValue={SWIPE_OPEN_VALUE}
-          rightOpenValue={DELETE_OPEN_VALUE}
-          stopLeftSwipe={SWIPE_OPEN_VALUE}
-          stopRightSwipe={DELETE_OPEN_VALUE}
-          swipeToOpenPercent={SWIPE_TO_OPEN_PERCENT}
-          swipeToClosePercent={SWIPE_TO_CLOSE_PERCENT}
-          directionalDistanceChangeThreshold={DIRECTION_THRESHOLD}
-          closeOnScroll
-          closeOnRowPress
-          closeOnRowOpen
-          closeOnRowBeginSwipe
-          disableLeftSwipe={false}
-          disableRightSwipe
-          recalculateHiddenLayout
-          onRowDidOpen={håndterRowDidOpen}
-          showsVerticalScrollIndicator={false}
-          useFlatList
-          swipeRowStyle={styles.swipeRow}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={10}
-          updateCellsBatchingPeriod={50}
-        />
-      )}
+            <View style={styles.headerTint} />
+          </View>
 
-      {tilbudFlyt.valgtTjeneste != null ? (
-        <NyttTilbudModal
-          visible={tilbudFlyt.visNyttTilbudModal}
-          onClose={tilbudFlyt.lukkModal}
-          firma={firma}
+          <TopBar absolute={false} />
+        </View>
+
+        <Toast
+          melding={toast.melding}
+          type={toast.type}
+          synlig={toast.synlig}
+          onHide={() => setToast(prev => ({ ...prev, synlig: false }))}
+        />
+
+        <View style={styles.body}>
+          {laster ? (
+            <ScrollView
+              style={styles.listFlex}
+              contentContainerStyle={[
+                styles.listContent,
+                {
+                  paddingTop: getTopBarOuterHeight(insets.top),
+                  paddingBottom: getFloatingTabBarPadding(insets.bottom),
+                  flexGrow: 1,
+                },
+              ]}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.titleBlock}>
+                <Text style={styles.title}>Sendte tilbud</Text>
+                <View style={styles.subtitleIndent}>
+                  <Text style={styles.subtitle}>{oppsummering}</Text>
+                </View>
+              </View>
+              <View style={styles.loadingWrap}>
+                <ActivityIndicator color="#111111" style={styles.spinner} size="large" />
+              </View>
+            </ScrollView>
+          ) : (
+            <SwipeListView
+              style={styles.listFlex}
+              data={swipeData}
+              keyExtractor={item => item.rowKey}
+              renderItem={renderItem}
+              renderHiddenItem={renderHiddenItem}
+              ListHeaderComponent={listHeader}
+              ListFooterComponent={listFooter}
+              ListEmptyComponent={<TomTilstand />}
+              contentContainerStyle={[
+                styles.listContent,
+                {
+                  paddingTop: getTopBarOuterHeight(insets.top),
+                  paddingBottom: getFloatingTabBarPadding(insets.bottom),
+                },
+              ]}
+            refreshControl={
+              <RefreshControl
+                refreshing={refresher}
+                onRefresh={async () => {
+                  setRefresher(true)
+                  await hentTilbud()
+                  setRefresher(false)
+                }}
+                tintColor="#111111"
+              />
+            }
+            leftOpenValue={SWIPE_OPEN_VALUE}
+            rightOpenValue={DELETE_OPEN_VALUE}
+            stopLeftSwipe={SWIPE_OPEN_VALUE}
+            stopRightSwipe={DELETE_OPEN_VALUE}
+            swipeToOpenPercent={SWIPE_TO_OPEN_PERCENT}
+            swipeToClosePercent={SWIPE_TO_CLOSE_PERCENT}
+            directionalDistanceChangeThreshold={DIRECTION_THRESHOLD}
+            closeOnScroll
+            closeOnRowPress
+            closeOnRowOpen
+            closeOnRowBeginSwipe
+            disableLeftSwipe={false}
+            disableRightSwipe
+            recalculateHiddenLayout
+            onRowDidOpen={håndterRowDidOpen}
+            showsVerticalScrollIndicator={false}
+            useFlatList
+            swipeRowStyle={styles.swipeRow}
+            initialNumToRender={10}
+            maxToRenderPerBatch={10}
+            windowSize={10}
+            updateCellsBatchingPeriod={50}
+            />
+          )}
+        </View>
+
+        {tilbudFlyt.valgtTjeneste != null ? (
+          <NyttTilbudModal
+            visible={tilbudFlyt.visNyttTilbudModal}
+            onClose={tilbudFlyt.lukkModal}
+            firma={firma}
+            valgtTjeneste={tilbudFlyt.valgtTjeneste}
+            onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
+            utkastKilde={tilbudFlyt.utkastKilde}
+            onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
+            onSendt={async navn => {
+              await hentTilbud()
+              const postSendDemoId = consumeOfferFlowPostSendDetaljerDemo()
+              visToast(`Tilbud sendt til ${navn}`)
+              if (postSendDemoId) {
+                setOpptaksPostSendVentPåKortId(postSendDemoId)
+              }
+            }}
+          />
+        ) : null}
+        <TjenesteSelectorSheet
+          visible={tilbudFlyt.visTjenesteSheet}
+          onClose={tilbudFlyt.lukkTjenesteSheet}
+          jobbtyper={jobbtyperListe}
           valgtTjeneste={tilbudFlyt.valgtTjeneste}
-          onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
-          utkastKilde={tilbudFlyt.utkastKilde}
-          onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
-          onSendt={navn => {
-            hentTilbud()
-            visToast(`Tilbud sendt til ${navn}`)
+          onSelect={håndterTjenesteSheetVelg}
+          opptaksDemoAutoVelg={opptaksDemoAutoVelg}
+          onOpptaksDemoAutoVelgFerdig={() => {
+            velgKommerFraDemoOpptakRef.current = true
           }}
         />
-      ) : null}
-      <TjenesteSelectorSheet
-        visible={tilbudFlyt.visTjenesteSheet}
-        onClose={tilbudFlyt.lukkTjenesteSheet}
-        jobbtyper={jobbtyperListe}
-        valgtTjeneste={tilbudFlyt.valgtTjeneste}
-        onSelect={tilbudFlyt.onTjenesteValgt}
-      />
 
-      <TilbudDetaljerModal
-        tilbud={valgtTilbud}
-        visible={valgtTilbud !== null}
-        onClose={() => setValgtTilbud(null)}
-        onOppdatert={navn => {
-          hentTilbud()
-          setValgtTilbud(null)
-          visToast(`Oppdatert tilbud sendt til ${navn}`)
-        }}
-        onUtfort={navn => {
-          hentTilbud()
-          setValgtTilbud(null)
-          visToast(`Jobb markert som utført (${navn})`)
-        }}
-      />
+        <TilbudDetaljerModal
+          tilbud={valgtTilbud}
+          visible={valgtTilbud !== null}
+          opptaksDemoScrollPreview={opptaksDetaljerDemoscroll}
+          onOpptaksDemoScrollPreviewFerdig={håndterOpptaksDetaljerDemoScrollFerdig}
+          onClose={() => {
+            setOpptaksDetaljerDemoscroll(false)
+            setValgtTilbud(null)
+          }}
+          onOppdatert={navn => {
+            hentTilbud()
+            setValgtTilbud(null)
+            visToast(`Oppdatert tilbud sendt til ${navn}`)
+          }}
+          onUtfort={navn => {
+            hentTilbud()
+            setValgtTilbud(null)
+            visToast(`Jobb markert som utført (${navn})`)
+          }}
+        />
     </SafeAreaView>
   )
 }
@@ -673,7 +797,26 @@ function TomTilstand() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EEF1F6',
+    backgroundColor: 'transparent',
+  },
+  body: {
+    flex: 1,
+  },
+  listFlex: {
+    flex: 1,
+  },
+  titleBlock: {
+    marginTop: 12,
+  },
+  subtitleIndent: {
+    marginTop: 4,
+    paddingLeft: 8,
+  },
+  subtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#888888',
   },
   header: {
     position: 'absolute',
@@ -683,8 +826,8 @@ const styles = StyleSheet.create({
     zIndex: 10,
     paddingBottom: 0,
     backgroundColor: 'transparent',
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
     overflow: 'hidden',
   },
   headerFrost: {
@@ -694,22 +837,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(238,241,246,0.1)',
   },
-  titleSection: {
-    paddingHorizontal: 16,
-    paddingBottom: 0,
-  },
   title: {
+    paddingLeft: 4,
     fontSize: 28,
     lineHeight: 32,
     fontFamily: 'DMSans_700Bold',
     color: '#111111',
-  },
-  summary: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontFamily: 'DMSans_400Regular',
-    color: '#888888',
-    marginBottom: 16,
   },
   loadingWrap: {
     flex: 1,
@@ -730,12 +863,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   filterSection: {
+    marginTop: 10,
     marginBottom: 16,
-  },
-  summaryBlock: {
-    marginTop: -4,
-    paddingLeft: 2,
-    paddingBottom: 0,
   },
   filterRow: {
     flexDirection: 'row',

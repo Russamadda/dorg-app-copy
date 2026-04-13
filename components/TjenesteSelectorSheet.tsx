@@ -1,10 +1,9 @@
-import { memo, useCallback, useEffect, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
   Modal,
   ScrollView,
-  TouchableOpacity,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -37,6 +36,8 @@ const KORTE_HINT: Partial<Record<string, string>> = {
   Annet: 'Tilpasset oppdrag',
 }
 
+const TJENESTE_RAD_HØYDE_APPROKS = 82
+
 export interface Props {
   visible: boolean
   onClose: () => void
@@ -44,6 +45,17 @@ export interface Props {
   valgtTjeneste: string | null
   onSelect: (tjeneste: string) => void
   tjenesteBeskrivelser?: Partial<Record<string, string>>
+  /**
+   * Opptaksdemo: etter `utsettMs` rulles listen til rad og `håndterVelg` kjøres (samme som trykk).
+   */
+  opptaksDemoAutoVelg?: {
+    tjeneste: string
+    utsettMs: number
+    pauseEtterScrollMs?: number
+    /** Synlig markering på rad før lukk (ms). */
+    highlightFørLukkMs?: number
+  } | null
+  onOpptaksDemoAutoVelgFerdig?: () => void
 }
 
 type RadProps = {
@@ -51,6 +63,7 @@ type RadProps = {
   erValgt: boolean
   undertekst?: string
   onVelg: (item: string) => void
+  opptaksHighlight?: boolean
 }
 
 const TjenesteListeRad = memo(function TjenesteListeRad({
@@ -58,12 +71,17 @@ const TjenesteListeRad = memo(function TjenesteListeRad({
   erValgt,
   undertekst,
   onVelg,
+  opptaksHighlight = false,
 }: RadProps) {
   return (
-    <TouchableOpacity
-      style={[styles.sheetRad, erValgt && styles.sheetRadValgt]}
-      activeOpacity={0.78}
+    <Pressable
       onPress={() => onVelg(item)}
+      style={({ pressed }) => [
+        styles.sheetRad,
+        erValgt && styles.sheetRadValgt,
+        opptaksHighlight && styles.sheetRadOpptaksHighlight,
+        pressed && styles.sheetRadPressed,
+      ]}
     >
       <View style={styles.sheetRadVenstre}>
         <View style={styles.sheetIkonBoks}>
@@ -89,7 +107,7 @@ const TjenesteListeRad = memo(function TjenesteListeRad({
       ) : (
         <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.28)" />
       )}
-    </TouchableOpacity>
+    </Pressable>
   )
 })
 
@@ -100,7 +118,11 @@ export function TjenesteSelectorSheet({
   valgtTjeneste,
   onSelect,
   tjenesteBeskrivelser,
+  opptaksDemoAutoVelg = null,
+  onOpptaksDemoAutoVelgFerdig,
 }: Props) {
+  const listeScrollRef = useRef<ScrollView>(null)
+  const [opptaksRadHighlight, setOpptaksRadHighlight] = useState<string | null>(null)
   const { height: windowHeight } = useWindowDimensions()
   const sheetSlidePixels = Math.min(
     560,
@@ -189,6 +211,49 @@ export function TjenesteSelectorSheet({
     [startLukkAnimasjon],
   )
 
+  useEffect(() => {
+    if (!visible) {
+      setOpptaksRadHighlight(null)
+    }
+  }, [visible])
+
+  useEffect(() => {
+    if (!visible || !opptaksDemoAutoVelg) return
+    const {
+      tjeneste,
+      utsettMs,
+      pauseEtterScrollMs = 700,
+      highlightFørLukkMs = 400,
+    } = opptaksDemoAutoVelg
+    const idx = jobbtyper.indexOf(tjeneste)
+    let avbrutt = false
+    let innerId: ReturnType<typeof setTimeout> | undefined
+    let highlightId: ReturnType<typeof setTimeout> | undefined
+    const outerId = setTimeout(() => {
+      if (avbrutt) return
+      if (idx >= 0) {
+        const y = Math.max(0, idx * TJENESTE_RAD_HØYDE_APPROKS - 48)
+        listeScrollRef.current?.scrollTo({ y, animated: true })
+      }
+      innerId = setTimeout(() => {
+        if (avbrutt) return
+        setOpptaksRadHighlight(tjeneste)
+        highlightId = setTimeout(() => {
+          if (avbrutt) return
+          setOpptaksRadHighlight(null)
+          onOpptaksDemoAutoVelgFerdig?.()
+          håndterVelg(tjeneste)
+        }, highlightFørLukkMs)
+      }, pauseEtterScrollMs)
+    }, utsettMs)
+    return () => {
+      avbrutt = true
+      clearTimeout(outerId)
+      if (innerId !== undefined) clearTimeout(innerId)
+      if (highlightId !== undefined) clearTimeout(highlightId)
+    }
+  }, [visible, opptaksDemoAutoVelg, jobbtyper, håndterVelg, onOpptaksDemoAutoVelgFerdig])
+
   const undertekster = useMemo(() => {
     const m: Record<string, string | undefined> = {}
     for (const j of jobbtyper) {
@@ -224,6 +289,7 @@ export function TjenesteSelectorSheet({
           </View>
           <Text style={styles.sheetTittel}>Velg tjeneste</Text>
           <ScrollView
+            ref={listeScrollRef}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={jobbtyper.length > 8}
             bounces={jobbtyper.length > 8}
@@ -236,6 +302,7 @@ export function TjenesteSelectorSheet({
                 erValgt={valgtTjeneste !== null && item === valgtTjeneste}
                 undertekst={undertekster[item]}
                 onVelg={håndterVelg}
+                opptaksHighlight={opptaksRadHighlight === item}
               />
             ))}
           </ScrollView>
@@ -295,6 +362,15 @@ const styles = StyleSheet.create({
   },
   sheetRadValgt: {
     backgroundColor: 'rgba(74,222,128,0.08)',
+  },
+  sheetRadPressed: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  sheetRadOpptaksHighlight: {
+    backgroundColor: 'rgba(74,222,128,0.2)',
+    borderLeftWidth: 4,
+    borderLeftColor: '#4ADE80',
+    paddingLeft: 12,
   },
   sheetRadVenstre: {
     flex: 1,

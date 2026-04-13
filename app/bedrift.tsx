@@ -31,6 +31,7 @@ import ToastMessage from '../components/ToastMessage'
 import Onboarding from '../components/Onboarding'
 import { getFloatingTabBarPadding } from '../components/FloatingTabBar'
 import AppBackground from '../components/AppBackground'
+import { BRAND_BACKGROUND_BASE_COLOR } from '../lib/backgroundConfig'
 
 function kapitaliser(s?: string | null) {
   if (!s) return ''
@@ -841,11 +842,11 @@ function FeltInput({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EEF1F6',
+    backgroundColor: BRAND_BACKGROUND_BASE_COLOR,
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#EEF1F6',
+    backgroundColor: BRAND_BACKGROUND_BASE_COLOR,
   },
   loadingIndicator: {
     marginTop: 100,

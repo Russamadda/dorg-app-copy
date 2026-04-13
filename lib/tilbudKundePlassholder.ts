@@ -12,7 +12,8 @@ export function tilbudTekstMedKundenavn(
   const fornavn = kundeNavnTrimmet.split(/\s+/)[0] ?? kundeNavnTrimmet
 
   return tekst
-    .replace(/\bTil:\s*Kunde\b/g, `Til: ${kundeNavnTrimmet}`)
-    .replace(/\bHei Kunde!\b/g, `Hei ${fornavn}!`)
-    .replace(/\bHei Kunde,\b/g, `Hei ${fornavn},`)
+    .replace(/\bTil:\s*Kunde\b/gi, `Til: ${kundeNavnTrimmet}`)
+    .replace(/\bHei\s+Kunde\s*!/gi, `Hei ${fornavn}!`)
+    .replace(/\bHei\s+Kunde\s*,/gi, `Hei ${fornavn},`)
+    .replace(/\bHei\s+Kunde\b/gi, `Hei ${fornavn}`)
 }

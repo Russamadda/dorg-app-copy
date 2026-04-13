@@ -13,6 +13,7 @@ import {
   Animated,
   Easing,
   Platform,
+  InteractionManager,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -30,12 +31,15 @@ import {
   supabase,
 } from '../lib/supabase'
 import { fjernKortLinje } from '../lib/tekstUtils'
+import { formatTimerOversiktStandard } from '../lib/formatTilbudVisning'
 import { beregnTilbudPrisLinjer } from '../lib/tilbudPris'
 import { hentAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
 import { getCachedTilbudHendelser, setCachedTilbudHendelser } from '../lib/tilbudHendelserCache'
 import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import type { Forespørsel, Firma, TilbudHendelse, TilbudHendelseType } from '../types'
 import { getTilbudKortStatus } from '../utils/tilbudStatus'
+import { OFFER_FLOW_DEMO_DETALJER_PREVIEW_SCROLL_MS } from '../lib/demoRecording/offerFlowDemoConfig'
+import { sleep, smoothScrollY } from '../lib/demoRecording/offerFlowDemoPrimitives'
 
 // Simplified details layout: restore the previous revision of this file from git history if the richer summary-based version is preferred again.
 // Timeline now prefers tilbud_hendelser and only falls back to snapshot-derived rows for legacy data or before the migration is applied.
@@ -75,6 +79,9 @@ interface Props {
   onClose: () => void
   onOppdatert: (kundeNavn: string) => void
   onUtfort?: (kundeNavn: string) => void
+  /** Opptaksdemo: sakte scroll til bunn av tilbudstekst etter åpning. */
+  opptaksDemoScrollPreview?: boolean
+  onOpptaksDemoScrollPreviewFerdig?: () => void
 }
 
 const HENDELSE_META: Record<TilbudHendelseType, { title: string; dotColor: string }> = {
@@ -218,12 +225,6 @@ function utledKundeJusteringsTekst(tilbud: Forespørsel, hendelser: TilbudHendel
   return tilbud.aiOppsummering?.trim() || undefined
 }
 
-function formatTimerOversikt(timer: number): string {
-  if (timer <= 0) return '0 timer'
-  if (timer % 1 === 0) return `${timer} timer`
-  return `${timer.toLocaleString('nb-NO')} timer`
-}
-
 function parseTimerFraTekst(raw: string, fallback: number): number {
   const n = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'))
   if (!Number.isFinite(n) || n < 0) return fallback
@@ -235,19 +236,6 @@ function parseMaterialFraTekst(raw: string, fallback: number): number {
   const n = parseInt(cleaned, 10)
   if (!Number.isFinite(n) || n < 0) return fallback
   return n
-}
-
-function parseTimeprisFraTekst(raw: string, fallback: number): number {
-  const cleaned = String(raw).replace(/\s/g, '')
-  const n = parseInt(cleaned, 10)
-  if (!Number.isFinite(n) || n <= 0) return fallback
-  return n
-}
-
-function parsePaslagFraTekst(raw: string, fallback: number): number {
-  const n = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'))
-  if (!Number.isFinite(n) || n < 0) return fallback
-  return Math.min(100, n)
 }
 
 function hentVersjonFraHendelse(hendelse: TilbudHendelse) {
@@ -524,7 +512,11 @@ export default function TilbudDetaljerModal({
   onClose,
   onOppdatert,
   onUtfort,
+  opptaksDemoScrollPreview = false,
+  onOpptaksDemoScrollPreviewFerdig,
 }: Props) {
+  const detaljerScrollRef = useRef<ScrollView>(null)
+  const detaljerScrollMetricsRef = useRef({ contentH: 0, layoutH: 0 })
   const bekreftAnimasjon = useRef(new Animated.Value(0)).current
   const totalPopScale = useRef(new Animated.Value(1)).current
   const forrigeTotalInklRef = useRef<number | null>(null)
@@ -532,9 +524,6 @@ export default function TilbudDetaljerModal({
   const [hendelser, setHendelser] = useState<TilbudHendelse[] | null>(null)
   const [timerTekst, setTimerTekst] = useState(String(tilbud?.timer ?? 8))
   const [materialTekst, setMaterialTekst] = useState(String(tilbud?.materialkostnad ?? 0))
-  const [timeprisTekst, setTimeprisTekst] = useState('')
-  const [matPaslagTekst, setMatPaslagTekst] = useState('')
-  const [visAvansertePriser, setVisAvansertePriser] = useState(false)
   const [bekreftet, setBekreftet] = useState(false)
   const [viserOppdatertPris, setViserOppdatertPris] = useState(false)
   const [oppdatertTekst, setOppdatertTekst] = useState('')
@@ -560,9 +549,7 @@ export default function TilbudDetaljerModal({
 
     async function lastData() {
       try {
-        const hendelserData = tilbud
-          ? await hentTilbudHendelser(tilbud.id)
-          : []
+        const hendelserData = tilbud ? await hentTilbudHendelser(tilbud.id) : []
 
         const {
           data: { user },
@@ -602,9 +589,6 @@ export default function TilbudDetaljerModal({
     if (tilbud) {
       setTimerTekst(String(tilbud.timer ?? 8))
       setMaterialTekst(String(tilbud.materialkostnad ?? 0))
-      setTimeprisTekst('')
-      setMatPaslagTekst('')
-      setVisAvansertePriser(false)
       setBekreftet(false)
       setViserOppdatertPris(false)
       setOppdatertTekst('')
@@ -618,35 +602,14 @@ export default function TilbudDetaljerModal({
     }
   }, [tilbud?.id, bekreftAnimasjon])
 
-  useEffect(() => {
-    if (!firma || !tilbud) return
-    setTimeprisTekst(prev => (prev.trim() === '' ? String(firma.timepris ?? 950) : prev))
-    setMatPaslagTekst(prev => (prev.trim() === '' ? String(firma.materialPaslag ?? 15) : prev))
-  }, [firma?.id, tilbud?.id])
-
   const harPrisEndring = useMemo(() => {
-    if (!tilbud || !firma) return false
+    if (!tilbud) return false
     const ot = tilbud.timer ?? 8
     const om = tilbud.materialkostnad ?? 0
-    const fTp = firma.timepris ?? 950
-    const fPs = firma.materialPaslag ?? 15
     const t = parseTimerFraTekst(timerTekst, ot)
     const m = parseMaterialFraTekst(materialTekst, om)
-    const tp = parseTimeprisFraTekst(timeprisTekst, fTp)
-    const ps = parsePaslagFraTekst(matPaslagTekst, fPs)
-    return t !== ot || m !== om || tp !== fTp || ps !== fPs
-  }, [
-    tilbud?.id,
-    tilbud?.timer,
-    tilbud?.materialkostnad,
-    firma?.id,
-    firma?.timepris,
-    firma?.materialPaslag,
-    timerTekst,
-    materialTekst,
-    timeprisTekst,
-    matPaslagTekst,
-  ])
+    return t !== ot || m !== om
+  }, [tilbud?.id, tilbud?.timer, tilbud?.materialkostnad, timerTekst, materialTekst])
 
   useEffect(() => {
     if (!tilbud || !firma) return
@@ -656,13 +619,11 @@ export default function TilbudDetaljerModal({
     const fPs = firma.materialPaslag ?? 15
     const t = parseTimerFraTekst(timerTekst, ot)
     const m = parseMaterialFraTekst(materialTekst, om)
-    const tp = parseTimeprisFraTekst(timeprisTekst, fTp)
-    const ps = parsePaslagFraTekst(matPaslagTekst, fPs)
     const total = beregnTilbudPrisLinjer({
       timer: t,
       materialkostnad: m,
-      timepris: tp,
-      materialPaslag: ps,
+      timepris: fTp,
+      materialPaslag: fPs,
     }).totalInklMva
 
     if (forrigeTotalInklRef.current === null) {
@@ -687,7 +648,57 @@ export default function TilbudDetaljerModal({
         useNativeDriver: true,
       }),
     ]).start()
-  }, [tilbud?.id, timerTekst, materialTekst, timeprisTekst, matPaslagTekst, firma?.id])
+  }, [tilbud?.id, timerTekst, materialTekst, firma?.id, firma?.timepris, firma?.materialPaslag])
+
+  useEffect(() => {
+    if (!visible) {
+      detaljerScrollMetricsRef.current = { contentH: 0, layoutH: 0 }
+    }
+  }, [visible, tilbud?.id])
+
+  useEffect(() => {
+    if (!visible || !opptaksDemoScrollPreview || !tilbud?.generertTekst?.trim()) return
+
+    let avbrutt = false
+    void (async () => {
+      await new Promise<void>(resolve => {
+        InteractionManager.runAfterInteractions(() => resolve())
+      })
+      await sleep(480)
+      if (avbrutt) return
+      for (let i = 0; i < 42; i++) {
+        if (avbrutt) return
+        const { contentH, layoutH } = detaljerScrollMetricsRef.current
+        if (layoutH > 8 && contentH > layoutH + 32) break
+        await sleep(45)
+      }
+      if (avbrutt) return
+      const { contentH, layoutH } = detaljerScrollMetricsRef.current
+      const maxY = Math.max(0, Math.round(contentH - layoutH))
+      detaljerScrollRef.current?.scrollTo({ y: 0, animated: false })
+      await sleep(90)
+      if (avbrutt) return
+      if (layoutH > 8 && maxY > 10) {
+        await smoothScrollY(
+          detaljerScrollRef,
+          0,
+          maxY,
+          OFFER_FLOW_DEMO_DETALJER_PREVIEW_SCROLL_MS
+        )
+      }
+      if (!avbrutt) onOpptaksDemoScrollPreviewFerdig?.()
+    })()
+
+    return () => {
+      avbrutt = true
+    }
+  }, [
+    visible,
+    opptaksDemoScrollPreview,
+    tilbud?.id,
+    tilbud?.generertTekst,
+    onOpptaksDemoScrollPreviewFerdig,
+  ])
 
   if (!tilbud) return null
 
@@ -719,12 +730,10 @@ export default function TilbudDetaljerModal({
   const dagerSidenSistSendt = dagerSiden(sisteSendtDato) ?? 0
   const antallPaminnelser = aktivtTilbud.antallPaminnelser ?? 0
 
-  const fallbackTimepris = firma?.timepris ?? 950
-  const fallbackPaslag = firma?.materialPaslag ?? 15
+  const timepris = firma?.timepris ?? 950
+  const matPaslag = firma?.materialPaslag ?? 15
   const timer = parseTimerFraTekst(timerTekst, originalTimer)
   const materialkostnad = parseMaterialFraTekst(materialTekst, originalMaterialkostnad)
-  const timepris = parseTimeprisFraTekst(timeprisTekst, fallbackTimepris)
-  const matPaslag = parsePaslagFraTekst(matPaslagTekst, fallbackPaslag)
   const prisLinjer = beregnTilbudPrisLinjer({
     timer,
     materialkostnad,
@@ -736,6 +745,9 @@ export default function TilbudDetaljerModal({
   const materialerInklMva = prisLinjer.materialerInklMva
   const arbeidInklMva = prisLinjer.arbeidInklMva
   const grunntekst = fjernKortLinje(aktivtTilbud.generertTekst ?? '')
+
+  const visHistorikkIOverblikk =
+    hendelser === null || presentasjon.timelineEvents.length > 0
 
   const visningsTekst = viserOppdatertPris
     ? erJusteringsTilbud
@@ -801,6 +813,8 @@ export default function TilbudDetaljerModal({
         generertTekst: visningsTekst,
         prisEksMva: sumEksMva,
         tilbudId: aktivtTilbud.id,
+        firmaTelefon: firma.telefon,
+        firmaEpost: firma.epost,
       })
 
       await oppdaterTilbudSnapshotUtenHendelse(aktivtTilbud.id, {
@@ -880,6 +894,8 @@ export default function TilbudDetaljerModal({
           generertTekst: aktivtTilbud.generertTekst,
           prisEksMva: aktivtTilbud.prisEksMva,
           tilbudId: aktivtTilbud.id,
+          firmaTelefon: firma.telefon,
+          firmaEpost: firma.epost,
         },
         erSiste
       )
@@ -1040,9 +1056,16 @@ export default function TilbudDetaljerModal({
         />
 
         <ScrollView
+          ref={detaljerScrollRef}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          onLayout={e => {
+            detaljerScrollMetricsRef.current.layoutH = e.nativeEvent.layout.height
+          }}
+          onContentSizeChange={(_, h) => {
+            detaljerScrollMetricsRef.current.contentH = h
+          }}
         >
           <OfferInternalSummaryCard
             tilbud={aktivtTilbud}
@@ -1054,7 +1077,7 @@ export default function TilbudDetaljerModal({
             totalInklMva={totalInklMva}
             arbeidInklMva={arbeidInklMva}
             materialerInklMva={materialerInklMva}
-            timerLabel={formatTimerOversikt(timer)}
+            timerLabel={formatTimerOversiktStandard(timer)}
             totalScale={totalPopScale}
             onPhonePress={åpneTelefon}
             onEmailPress={åpneEpost}
@@ -1074,11 +1097,226 @@ export default function TilbudDetaljerModal({
                 </TouchableOpacity>
               ) : null
             }
-          />
-
-          <OfferTimelinePanel
-            events={presentasjon.timelineEvents}
-            loading={hendelser === null}
+            kundeJusteringSlot={
+              erJusteringsTilbud ? (
+                <View style={styles.kundeMeldingInline}>
+                  <Text style={styles.kundeMeldingInlineTittel}>Melding fra kunde</Text>
+                  {hendelser === null ? (
+                    <View style={styles.kundeMeldingInlineLoading}>
+                      <ActivityIndicator size="small" color="rgba(0,255,150,0.55)" />
+                      <Text style={styles.kundeMeldingInlineLoadingTekst}>Henter melding …</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.kundeMeldingInlineBody}>
+                      {kundeJusteringsTekst?.trim() ||
+                        'Ingen melding funnet på tilbudet eller i historikk.'}
+                    </Text>
+                  )}
+                </View>
+              ) : null
+            }
+            prisjusteringSlot={
+              visPrisjusteringKort ? (
+                <View style={styles.prisJusteringInlineWrap}>
+                  <Text style={styles.prisInlineSeksjonTittel}>Oppdater grunnlag</Text>
+                  <Text style={styles.firmaPrisHint}>
+                    Timepris og materialpåslag følger{' '}
+                    <Text style={styles.firmaPrisHintAccent}>firmainnstillingene</Text>.
+                  </Text>
+                  <View style={styles.prisInlineInputRow}>
+                    <View style={styles.prisInlineInputCellTimer}>
+                      <Text style={styles.prisInlineLabel}>Timer</Text>
+                      <TextInput
+                        style={[styles.prisInlineInput, styles.prisInlineInputTimer]}
+                        value={timerTekst}
+                        onChangeText={v => {
+                          setTimerTekst(v)
+                          nullstillEtterPrisRedigering()
+                        }}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor="rgba(255,255,255,0.35)"
+                        {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                      />
+                    </View>
+                    <View style={styles.prisInlineInputCellMaterial}>
+                      <Text style={styles.prisInlineLabel}>Material (kr)</Text>
+                      <TextInput
+                        style={styles.prisInlineInput}
+                        value={materialTekst}
+                        onChangeText={v => {
+                          setMaterialTekst(v)
+                          nullstillEtterPrisRedigering()
+                        }}
+                        keyboardType="number-pad"
+                        placeholder="0"
+                        placeholderTextColor="rgba(255,255,255,0.35)"
+                        {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.prisInlineActionRad}>
+                    {erJusteringsTilbud ? (
+                      <TouchableOpacity
+                        style={[styles.primaryCtaTouch, styles.prisInlineCtaTouch]}
+                        onPress={() => {
+                          if (justeringFase === 'klar') {
+                            void bekreftJustering()
+                            return
+                          }
+                          if (justeringFase === 'klar_til_sending') {
+                            void sendOppdatertTilbud()
+                          }
+                        }}
+                        disabled={justeringFase === 'genererer' || sender}
+                        activeOpacity={0.92}
+                      >
+                        {justeringFase === 'genererer' ? (
+                          <LinearGradient
+                            colors={['rgba(45,90,62,0.95)', 'rgba(24,55,38,0.98)']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
+                          >
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                            <Text style={styles.primaryCtaTekst}>Genererer tilbud...</Text>
+                          </LinearGradient>
+                        ) : justeringFase === 'klar_til_sending' || bekreftet ? (
+                          <LinearGradient
+                            colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
+                          >
+                            {justeringFase === 'klar_til_sending' ? (
+                              <View style={styles.knappInnhold}>
+                                {sender ? (
+                                  <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                  <Ionicons name="send-outline" size={18} color="#FFFFFF" />
+                                )}
+                                <Text style={styles.primaryCtaTekst}>Send tilbud</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.knappInnhold}>
+                                <Animated.View
+                                  style={{
+                                    opacity: bekreftIkonOpacity,
+                                    transform: [{ scale: bekreftIkonSkala }],
+                                  }}
+                                >
+                                  <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                                </Animated.View>
+                                <Text style={styles.primaryCtaTekst}>Pris oppdatert!</Text>
+                              </View>
+                            )}
+                          </LinearGradient>
+                        ) : (
+                          <LinearGradient
+                            colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
+                          >
+                            <Text style={styles.primaryCtaTekst}>Generer nytt tilbud</Text>
+                          </LinearGradient>
+                        )}
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.primaryCtaTouch, styles.prisInlineCtaTouch]}
+                        onPress={() => {
+                          if (bekreftet) {
+                            void sendOppdatertTilbud()
+                            return
+                          }
+                          void bekreftPrisendring()
+                        }}
+                        disabled={(!kanBekrefte && !bekreftet) || sender || oppdatererPris}
+                        activeOpacity={0.92}
+                      >
+                        {bekreftet ? (
+                          <LinearGradient
+                            colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
+                          >
+                            <View style={styles.knappInnhold}>
+                              {sender ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <Ionicons name="send-outline" size={18} color="#FFFFFF" />
+                              )}
+                              <Text style={styles.primaryCtaTekst}>Send tilbud</Text>
+                            </View>
+                          </LinearGradient>
+                        ) : oppdatererPris ? (
+                          <View
+                            style={[
+                              styles.primaryCtaGradient,
+                              styles.primaryCtaInner,
+                              styles.primaryCtaMuted,
+                              styles.prisInlineCtaGradient,
+                            ]}
+                          >
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                            <Text style={styles.primaryCtaTekstMuted}>Oppdaterer...</Text>
+                          </View>
+                        ) : (
+                          <LinearGradient
+                            colors={
+                              kanBekrefte
+                                ? ['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']
+                                : ['rgba(55,60,68,0.95)', 'rgba(35,38,44,0.98)']
+                            }
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
+                          >
+                            <Text
+                              style={kanBekrefte ? styles.primaryCtaTekst : styles.primaryCtaTekstMuted}
+                            >
+                              Oppdater pris
+                            </Text>
+                          </LinearGradient>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => {
+                        setTimerTekst(String(originalTimer))
+                        setMaterialTekst(String(originalMaterialkostnad))
+                        nullstillEtterPrisRedigering()
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={styles.prisInlineResetKnapp}
+                      disabled={oppdatererPris}
+                    >
+                      <Ionicons name="refresh" size={18} color="#9CA3AF" />
+                    </TouchableOpacity>
+                  </View>
+                  {erJusteringsTilbud ? (
+                    <TouchableOpacity
+                      onPress={avvisJustering}
+                      activeOpacity={0.75}
+                      style={styles.avvisJusteringInline}
+                    >
+                      <Text style={styles.avvisJusteringTekst}>Avvis justering</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null
+            }
+            historikkSlot={
+              visHistorikkIOverblikk ? (
+                <OfferTimelinePanel
+                  events={presentasjon.timelineEvents}
+                  loading={hendelser === null}
+                  blended
+                />
+              ) : null
+            }
           />
 
           {erGodkjentTilbud ? (
@@ -1102,271 +1340,6 @@ export default function TilbudDetaljerModal({
                 </LinearGradient>
               </TouchableOpacity>
             </View>
-          ) : null}
-
-          {visPrisjusteringKort ? (
-            <>
-              <View
-                style={[
-                  styles.prisRedigerKort,
-                  erJusteringsTilbud && styles.prisRedigerKortTightBottom,
-                ]}
-              >
-                {erJusteringsTilbud ? (
-                  <View style={styles.kundeMeldingBoks}>
-                    <Text
-                      style={[
-                        styles.kundeMeldingTittel,
-                        !kundeJusteringsTekst && styles.justeringsHeaderSummaryLoading,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      Melding fra kunde
-                    </Text>
-                    <View style={styles.kundeMeldingSkille} />
-                    <Text
-                      style={[
-                        styles.kundeMeldingTekst,
-                        !kundeJusteringsTekst && styles.justeringsHeaderSummaryLoading,
-                      ]}
-                    >
-                      {kundeJusteringsTekst?.trim() || '(mangler)'}
-                    </Text>
-                  </View>
-                ) : null}
-
-                <Text style={styles.prisRedigerSeksjonstittel}>Pris og omfang</Text>
-                <View style={styles.prisInputRad}>
-                  <View style={styles.prisInputCell}>
-                    <Text style={styles.prisInputLabel}>Timer</Text>
-                    <TextInput
-                      style={styles.prisInput}
-                      value={timerTekst}
-                      onChangeText={v => {
-                        setTimerTekst(v)
-                        nullstillEtterPrisRedigering()
-                      }}
-                      keyboardType="decimal-pad"
-                      placeholder="0"
-                      placeholderTextColor="rgba(255,255,255,0.35)"
-                      {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                    />
-                  </View>
-                  <View style={styles.prisInputCell}>
-                    <Text style={styles.prisInputLabel}>Material (kr)</Text>
-                    <TextInput
-                      style={styles.prisInput}
-                      value={materialTekst}
-                      onChangeText={v => {
-                        setMaterialTekst(v)
-                        nullstillEtterPrisRedigering()
-                      }}
-                      keyboardType="number-pad"
-                      placeholder="0"
-                      placeholderTextColor="rgba(255,255,255,0.35)"
-                      {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                    />
-                  </View>
-                </View>
-                <TouchableOpacity
-                  style={styles.avansertePriserToggle}
-                  onPress={() => setVisAvansertePriser(v => !v)}
-                  activeOpacity={0.75}
-                  hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-                >
-                  <Text style={styles.avansertePriserToggleTekst}>Avanserte prisvalg</Text>
-                  <Ionicons
-                    name={visAvansertePriser ? 'chevron-up' : 'chevron-down'}
-                    size={18}
-                    color="rgba(255,255,255,0.45)"
-                  />
-                </TouchableOpacity>
-
-                {visAvansertePriser ? (
-                  <View style={styles.prisInputRad}>
-                    <View style={styles.prisInputCell}>
-                      <Text style={styles.prisInputLabel}>Timepris (kr/t)</Text>
-                      <TextInput
-                        style={styles.prisInput}
-                        value={timeprisTekst}
-                        onChangeText={v => {
-                          setTimeprisTekst(v)
-                          nullstillEtterPrisRedigering()
-                        }}
-                        keyboardType="number-pad"
-                        placeholder={String(fallbackTimepris)}
-                        placeholderTextColor="rgba(255,255,255,0.35)"
-                        {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                      />
-                    </View>
-                    <View style={styles.prisInputCell}>
-                      <Text style={styles.prisInputLabel}>Mat.påslag (%)</Text>
-                      <TextInput
-                        style={styles.prisInput}
-                        value={matPaslagTekst}
-                        onChangeText={v => {
-                          setMatPaslagTekst(v)
-                          nullstillEtterPrisRedigering()
-                        }}
-                        keyboardType="decimal-pad"
-                        placeholder={String(fallbackPaslag)}
-                        placeholderTextColor="rgba(255,255,255,0.35)"
-                        {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                      />
-                    </View>
-                  </View>
-                ) : null}
-
-                <View style={styles.prisActionDivider} />
-
-                <View style={styles.prisActionRad}>
-                  {erJusteringsTilbud ? (
-                    <TouchableOpacity
-                      style={styles.primaryCtaTouch}
-                      onPress={() => {
-                        if (justeringFase === 'klar') {
-                          void bekreftJustering()
-                          return
-                        }
-                        if (justeringFase === 'klar_til_sending') {
-                          void sendOppdatertTilbud()
-                        }
-                      }}
-                      disabled={justeringFase === 'genererer' || sender}
-                      activeOpacity={0.92}
-                    >
-                      {justeringFase === 'genererer' ? (
-                        <LinearGradient
-                          colors={['rgba(45,90,62,0.95)', 'rgba(24,55,38,0.98)']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.primaryCtaGradient, styles.primaryCtaInner]}
-                        >
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                          <Text style={styles.primaryCtaTekst}>Genererer tilbud...</Text>
-                        </LinearGradient>
-                      ) : justeringFase === 'klar_til_sending' || bekreftet ? (
-                        <LinearGradient
-                          colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.primaryCtaGradient, styles.primaryCtaInner]}
-                        >
-                          {justeringFase === 'klar_til_sending' ? (
-                            <View style={styles.knappInnhold}>
-                              {sender ? (
-                                <ActivityIndicator size="small" color="#FFFFFF" />
-                              ) : (
-                                <Ionicons name="send-outline" size={18} color="#FFFFFF" />
-                              )}
-                              <Text style={styles.primaryCtaTekst}>Send tilbud</Text>
-                            </View>
-                          ) : (
-                            <View style={styles.knappInnhold}>
-                              <Animated.View
-                                style={{
-                                  opacity: bekreftIkonOpacity,
-                                  transform: [{ scale: bekreftIkonSkala }],
-                                }}
-                              >
-                                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                              </Animated.View>
-                              <Text style={styles.primaryCtaTekst}>Pris oppdatert!</Text>
-                            </View>
-                          )}
-                        </LinearGradient>
-                      ) : (
-                        <LinearGradient
-                          colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.primaryCtaGradient, styles.primaryCtaInner]}
-                        >
-                          <Text style={styles.primaryCtaTekst}>Generer nytt tilbud</Text>
-                        </LinearGradient>
-                      )}
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.primaryCtaTouch}
-                      onPress={() => {
-                        if (bekreftet) {
-                          void sendOppdatertTilbud()
-                          return
-                        }
-                        void bekreftPrisendring()
-                      }}
-                      disabled={(!kanBekrefte && !bekreftet) || sender || oppdatererPris}
-                      activeOpacity={0.92}
-                    >
-                      {bekreftet ? (
-                        <LinearGradient
-                          colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.primaryCtaGradient, styles.primaryCtaInner]}
-                        >
-                          <View style={styles.knappInnhold}>
-                            {sender ? (
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                            ) : (
-                              <Ionicons name="send-outline" size={18} color="#FFFFFF" />
-                            )}
-                            <Text style={styles.primaryCtaTekst}>Send tilbud</Text>
-                          </View>
-                        </LinearGradient>
-                      ) : oppdatererPris ? (
-                        <View style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.primaryCtaMuted]}>
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                          <Text style={styles.primaryCtaTekstMuted}>Oppdaterer...</Text>
-                        </View>
-                      ) : (
-                        <LinearGradient
-                          colors={
-                            kanBekrefte
-                              ? ['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']
-                              : ['rgba(55,60,68,0.95)', 'rgba(35,38,44,0.98)']
-                          }
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.primaryCtaGradient, styles.primaryCtaInner]}
-                        >
-                          <Text
-                            style={kanBekrefte ? styles.primaryCtaTekst : styles.primaryCtaTekstMuted}
-                          >
-                            Oppdater pris
-                          </Text>
-                        </LinearGradient>
-                      )}
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity
-                    onPress={() => {
-                      setTimerTekst(String(originalTimer))
-                      setMaterialTekst(String(originalMaterialkostnad))
-                      setTimeprisTekst(String(firma?.timepris ?? 950))
-                      setMatPaslagTekst(String(firma?.materialPaslag ?? 15))
-                      nullstillEtterPrisRedigering()
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    style={styles.resetKnapp}
-                    disabled={oppdatererPris}
-                  >
-                    <Ionicons name="refresh" size={22} color="#9CA3AF" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {erJusteringsTilbud ? (
-                <TouchableOpacity
-                  onPress={avvisJustering}
-                  activeOpacity={0.75}
-                  style={styles.avvisJusteringKnapp}
-                >
-                  <Text style={styles.avvisJusteringTekst}>Avvis justering</Text>
-                </TouchableOpacity>
-              ) : null}
-            </>
           ) : null}
 
           {aktivtTilbud.generertTekst ? (
@@ -1398,6 +1371,9 @@ function OfferInternalSummaryCard({
   onPhonePress,
   onEmailPress,
   reminderButton,
+  kundeJusteringSlot,
+  prisjusteringSlot,
+  historikkSlot,
 }: {
   tilbud: Forespørsel
   tjenesteLabel: string
@@ -1409,6 +1385,9 @@ function OfferInternalSummaryCard({
   onPhonePress: () => void
   onEmailPress: () => void
   reminderButton?: ReactNode
+  kundeJusteringSlot?: ReactNode
+  prisjusteringSlot?: ReactNode
+  historikkSlot?: ReactNode
 }) {
   const harKundeSeksjon =
     Boolean(tilbud.kundeNavn?.trim()) ||
@@ -1425,22 +1404,15 @@ function OfferInternalSummaryCard({
         style={styles.metadataCardTint}
       />
       <View style={styles.metadataCardInner}>
-        <View style={styles.metadataTopRow}>
-          <Text style={styles.metadataTjeneste} numberOfLines={2}>
+        <View style={styles.metadataTopRowSolo}>
+          <Text
+            style={styles.metadataTjeneste}
+            numberOfLines={3}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
             {tjenesteLabel}
           </Text>
-          <View style={styles.metadataTotalCol}>
-            <Animated.Text
-              style={[
-                styles.metadataTotalBeløp,
-                { transform: [{ scale: totalScale }] },
-              ]}
-              numberOfLines={1}
-            >
-              {totalInklMva === 0 ? 'Avtales' : `kr ${totalInklMva.toLocaleString('nb-NO')}`}
-            </Animated.Text>
-            <Text style={styles.metadataTotalCaption}>Totalt inkl. mva</Text>
-          </View>
         </View>
         {reminderButton ? (
           <View style={styles.summaryPaminnelseRad}>{reminderButton}</View>
@@ -1462,9 +1434,34 @@ function OfferInternalSummaryCard({
           <Text style={styles.metadataDetaljLabel}>Estimert tid</Text>
           <Text style={styles.metadataDetaljVerdi}>{timerLabel}</Text>
         </View>
+        <View style={styles.metadataTotalEtterTidRad}>
+          <Text style={styles.metadataDetaljLabel}>Totalt inkl. mva</Text>
+          <Animated.Text
+            style={[
+              styles.metadataTotalBeløp,
+              styles.metadataTotalBeløpIRekke,
+              { transform: [{ scale: totalScale }] },
+            ]}
+            numberOfLines={1}
+          >
+            {totalInklMva === 0 ? 'Avtales' : `kr ${totalInklMva.toLocaleString('nb-NO')}`}
+          </Animated.Text>
+        </View>
+        {kundeJusteringSlot ? (
+          <>
+            <View style={styles.summaryInnholdSkille} />
+            {kundeJusteringSlot}
+          </>
+        ) : null}
+        {prisjusteringSlot ? (
+          <>
+            <View style={styles.summaryInnholdSkille} />
+            {prisjusteringSlot}
+          </>
+        ) : null}
         {harKundeSeksjon ? (
           <>
-            <View style={styles.metadataInndeling} />
+            <View style={styles.metadataPrisTilKontaktSkille} />
             {tilbud.kundeNavn?.trim() ? (
               <View style={styles.metadataDetaljRad}>
                 <Text style={styles.metadataDetaljLabel}>Kunde</Text>
@@ -1507,6 +1504,12 @@ function OfferInternalSummaryCard({
             ) : null}
           </>
         ) : null}
+        {historikkSlot ? (
+          <>
+            <View style={styles.summaryHistorikkSkille} />
+            {historikkSlot}
+          </>
+        ) : null}
       </View>
     </View>
   )
@@ -1515,23 +1518,31 @@ function OfferInternalSummaryCard({
 function OfferTimelinePanel({
   events,
   loading,
+  blended,
 }: {
   events: TimelineEvent[]
   loading: boolean
+  /** Inne i oversiktkort: flatere visning uten ekstra svart «kort-i-kort». */
+  blended?: boolean
 }) {
+  const boksStyle = blended ? styles.timelineSectionBlended : styles.timelineSection
   if (loading) {
     return (
-      <View style={styles.timelineSection}>
+      <View style={styles.timelineSectionWrap}>
         <Text style={styles.timelineSectionTittel}>Historikk</Text>
-        <OfferTimelineSkeleton count={4} />
+        <View style={boksStyle}>
+          <OfferTimelineSkeleton count={4} />
+        </View>
       </View>
     )
   }
   if (events.length === 0) return null
   return (
-    <View style={styles.timelineSection}>
+    <View style={styles.timelineSectionWrap}>
       <Text style={styles.timelineSectionTittel}>Historikk</Text>
-      <OfferTimeline events={events} />
+      <View style={boksStyle}>
+        <OfferTimeline events={events} />
+      </View>
     </View>
   )
 }
@@ -2133,18 +2144,25 @@ const styles = StyleSheet.create({
   },
   prisActionRad: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
+    alignItems: 'center',
+    gap: 8,
+  },
+  prisKortCtaTouch: {
+    maxWidth: '72%',
+  },
+  prisKortCtaGradient: {
+    height: 42,
+    borderRadius: 12,
+    paddingHorizontal: 12,
   },
   resetKnapp: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.07)',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-    alignSelf: 'flex-end',
   },
   bekreftKnapp: {
     flex: 1,
@@ -2218,35 +2236,40 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 12,
   },
-  metadataTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+  metadataTopRowSolo: {
+    marginBottom: 2,
+    width: '100%',
+    minWidth: 0,
   },
   metadataTjeneste: {
-    flex: 1,
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 17,
-    lineHeight: 22,
+    width: '100%',
+    minWidth: 0,
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: -0.35,
     color: '#E8ECF2',
-    paddingRight: 4,
-  },
-  metadataTotalCol: {
-    alignItems: 'flex-end',
-    maxWidth: '48%',
-  },
-  metadataTotalCaption: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.45)',
-    marginTop: 3,
   },
   metadataTotalBeløp: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 20,
     letterSpacing: -0.3,
     color: '#FFFFFF',
+  },
+  metadataTotalBeløpIRekke: {
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  metadataTotalEtterTidRad: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 4,
+    marginBottom: 2,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
   },
   summaryPaminnelseRad: {
     alignItems: 'flex-end',
@@ -2259,11 +2282,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 10,
   },
-  metadataInndeling: {
+  metadataPrisTilKontaktSkille: {
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    marginTop: 10,
-    marginBottom: 12,
+    backgroundColor: 'rgba(0, 255, 150, 0.2)',
+    marginTop: 20,
+    marginBottom: 14,
+    alignSelf: 'stretch',
   },
   metadataDetaljRad: {
     flexDirection: 'row',
@@ -2288,27 +2312,174 @@ const styles = StyleSheet.create({
     color: '#9ED8B5',
     textDecorationLine: 'underline',
   },
-  timelineSection: {
-    paddingHorizontal: 2,
-    paddingTop: 4,
-    paddingBottom: 10,
+  summaryHistorikkSkille: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  summaryInnholdSkille: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  kundeMeldingInline: {
+    borderLeftWidth: 3,
+    borderLeftColor: 'rgba(0, 255, 150, 0.42)',
+    paddingLeft: 12,
+    paddingVertical: 2,
+  },
+  kundeMeldingInlineTittel: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 11,
+    letterSpacing: 0.55,
+    color: 'rgba(255,255,255,0.52)',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  kundeMeldingInlineBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#E8ECF2',
+  },
+  kundeMeldingInlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  kundeMeldingInlineLoadingTekst: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.48)',
+  },
+  prisJusteringInlineWrap: {
+    paddingBottom: 2,
+  },
+  prisInlineSeksjonTittel: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 11,
+    letterSpacing: 0.55,
+    color: 'rgba(255,255,255,0.88)',
+    textTransform: 'uppercase',
     marginBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  firmaPrisHint: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 11,
+    lineHeight: 15,
+    color: 'rgba(255,255,255,0.42)',
+    marginBottom: 10,
+  },
+  firmaPrisHintAccent: {
+    color: 'rgba(0, 255, 150, 0.78)',
+  },
+  prisInlineInputRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  /** Timer trenger sjelden mer enn noen få tegn — smal kolonne. */
+  prisInlineInputCellTimer: {
+    flexGrow: 0,
+    flexShrink: 0,
+    width: 100,
+  },
+  /** Bredde ~halvparten av raden (ikke full rest etter timer). */
+  prisInlineInputCellMaterial: {
+    width: '50%',
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  prisInlineLabel: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.45)',
+    marginBottom: 5,
+    letterSpacing: 0.3,
+  },
+  prisInlineInput: {
+    height: 40,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  prisInlineInputTimer: {
+    paddingHorizontal: 10,
+  },
+  prisInlineActionRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  prisInlineCtaTouch: {
+    flex: 1,
+    minWidth: 0,
+  },
+  prisInlineCtaGradient: {
+    height: 44,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+  },
+  prisInlineResetKnapp: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  avvisJusteringInline: {
+    alignSelf: 'center',
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  timelineSectionWrap: {
+    marginBottom: 0,
+  },
+  timelineSection: {
+    backgroundColor: '#000000',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 150, 0.14)',
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
+    overflow: 'hidden',
+  },
+  timelineSectionBlended: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    overflow: 'visible',
   },
   timelineSectionTittel: {
     fontFamily: 'DMSans_600SemiBold',
-    fontSize: 11,
-    letterSpacing: 0.5,
-    color: 'rgba(255,255,255,0.38)',
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: 'rgba(255,255,255,0.82)',
     textTransform: 'uppercase',
-    marginBottom: 8,
+    textAlign: 'left',
+    marginBottom: 10,
   },
   dokumentSeksjonLabel: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 12,
     letterSpacing: 0.6,
-    color: 'rgba(255,255,255,0.42)',
+    color: 'rgba(255,255,255,0.88)',
     textTransform: 'uppercase',
     marginBottom: 8,
     marginTop: 4,
@@ -2330,21 +2501,8 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.72)',
     marginBottom: 12,
     letterSpacing: 0.2,
-  },
-  avansertePriserToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    alignSelf: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    marginBottom: 4,
-  },
-  avansertePriserToggleTekst: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.5)',
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   prisInputRad: {
     flexDirection: 'row',

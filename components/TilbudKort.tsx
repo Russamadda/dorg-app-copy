@@ -8,6 +8,8 @@ import { getTilbudKortStatus } from '../utils/tilbudStatus'
 interface TilbudKortProps {
   tilbud: Forespørsel
   onPress: (tilbud: Forespørsel) => void
+  /** Opptaksdemo: kort «trykkes» visuelt før detaljer åpnes. */
+  opptaksDemoTrykkPulse?: boolean
 }
 
 function formaterKortDato(tilbud: Forespørsel) {
@@ -22,8 +24,9 @@ function formaterKortDato(tilbud: Forespørsel) {
   })
 }
 
-function TilbudKortInner({ tilbud, onPress }: TilbudKortProps) {
+function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: TilbudKortProps) {
   const pulseAnim = useRef(new Animated.Value(0)).current
+  const demoTrykkScale = useRef(new Animated.Value(1)).current
   const totalInklMva = beregnTilbudTotalInklMva(tilbud)
   const tjenestetittel = tilbud.kortBeskrivelse ?? tilbud.jobbType ?? 'Tilbud'
   const statusMeta = getTilbudKortStatus(tilbud)
@@ -67,10 +70,29 @@ function TilbudKortInner({ tilbud, onPress }: TilbudKortProps) {
     }
   }, [pulseAnim, visUlestIndikator])
 
+  useEffect(() => {
+    if (!opptaksDemoTrykkPulse) return
+    demoTrykkScale.setValue(1)
+    Animated.sequence([
+      Animated.timing(demoTrykkScale, {
+        toValue: 0.94,
+        duration: 110,
+        useNativeDriver: true,
+      }),
+      Animated.spring(demoTrykkScale, {
+        toValue: 1,
+        friction: 7,
+        tension: 140,
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [opptaksDemoTrykkPulse, demoTrykkScale])
+
   return (
+    <Animated.View style={[styles.pressableCard, { transform: [{ scale: demoTrykkScale }] }]}>
     <Pressable
       onPress={() => onPress(tilbud)}
-      style={styles.pressableCard}
+      style={styles.pressableCardInner}
     >
       <View style={styles.card}>
         {visUlestIndikator ? (
@@ -110,7 +132,12 @@ function TilbudKortInner({ tilbud, onPress }: TilbudKortProps) {
         <View style={styles.bottomRow}>
           <View style={styles.mainContent}>
             <View style={styles.descriptionWrap}>
-              <Text style={styles.tjeneste} numberOfLines={1}>
+              <Text
+                style={styles.tjeneste}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.62}
+              >
                 {tjenestetittel}
               </Text>
             </View>
@@ -145,11 +172,15 @@ function TilbudKortInner({ tilbud, onPress }: TilbudKortProps) {
         </View>
       </View>
     </Pressable>
+    </Animated.View>
   )
 }
 
 function erLikeTilbudKortProps(prev: TilbudKortProps, next: TilbudKortProps): boolean {
   if (prev.onPress !== next.onPress) {
+    return false
+  }
+  if (prev.opptaksDemoTrykkPulse !== next.opptaksDemoTrykkPulse) {
     return false
   }
   const a = prev.tilbud
@@ -176,6 +207,10 @@ export default TilbudKort
 
 const styles = StyleSheet.create({
   pressableCard: {
+    flex: 1,
+    alignSelf: 'stretch',
+  },
+  pressableCardInner: {
     flex: 1,
     alignSelf: 'stretch',
   },
@@ -246,7 +281,8 @@ const styles = StyleSheet.create({
   },
   descriptionWrap: {
     minWidth: 0,
-    paddingRight: 4,
+    flex: 1,
+    paddingRight: 8,
   },
   navn: {
     fontSize: 16,
@@ -262,7 +298,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   tjeneste: {
-    flex: 1,
+    width: '100%',
+    minWidth: 0,
     fontSize: 17,
     lineHeight: 22,
     fontFamily: 'DMSans_700Bold',

@@ -11,71 +11,293 @@ interface SendTilbudEpostInput {
   generertTekst: string
   prisEksMva: number
   tilbudId: string
+  /** Valgfritt — brukes i hjelpe-/kontaktseksjon i e-postskallet (ikke i AI-teksten). */
+  firmaTelefon?: string | null
+  firmaEpost?: string | null
+}
+
+function escapeHtmlTekst(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Bevarer ordlyd; kun `**` → `<strong>` og HTML-escape ellers. */
+function formatInlineMarkdownOgEscape(text: string): string {
+  const parts = text.split(/(\*\*.+?\*\*)/g)
+  return parts
+    .map(part => {
+      const bold = part.match(/^\*\*(.+)\*\*$/)
+      if (bold) return `<strong>${escapeHtmlTekst(bold[1])}</strong>`
+      return escapeHtmlTekst(part)
+    })
+    .join('')
+}
+
+const META_LINJE =
+  /^\s*(Til|Fra|Adresse|Tlf|E-post|Dato):\s*(.*)$/
+
+function erTilbudTittellinje(line: string): boolean {
+  return /^(\*\*)?Tilbud\s*[–—\-]\s*.+/.test(line.trimEnd())
+}
+
+function byggEpostKontaktHjelpSeksjon(telefon: string | null | undefined, epost: string | null | undefined): string {
+  const tel = telefon?.trim() ?? ''
+  const mail = epost?.trim() ?? ''
+  const telHref = tel.replace(/\s/g, '')
+  const link = 'color:#166534;text-decoration:underline;'
+  const tittel = 'margin:0 0 8px 0;font-size:14px;font-weight:600;color:#374151;'
+  const brød = 'margin:0;font-size:14px;line-height:1.55;color:#52525b;'
+  const hjelpeLedetekst = 'Har du spørsmål eller endringer til tilbudet?'
+  if (tel && mail) {
+    return `<p style="${tittel}">${hjelpeLedetekst}</p>
+<p style="${brød}">Ring oss på <a href="tel:${escapeHtmlTekst(telHref)}" style="${link}">${escapeHtmlTekst(tel)}</a> eller send e-post til <a href="mailto:${escapeHtmlTekst(mail)}" style="${link}">${escapeHtmlTekst(mail)}</a>.</p>`
+  }
+  if (tel) {
+    return `<p style="${tittel}">${hjelpeLedetekst}</p>
+<p style="${brød}">Ring oss på <a href="tel:${escapeHtmlTekst(telHref)}" style="${link}">${escapeHtmlTekst(tel)}</a>.</p>`
+  }
+  if (mail) {
+    return `<p style="${tittel}">${hjelpeLedetekst}</p>
+<p style="${brød}">Send e-post til <a href="mailto:${escapeHtmlTekst(mail)}" style="${link}">${escapeHtmlTekst(mail)}</a>.</p>`
+  }
+  return `<p style="margin:0;font-size:14px;font-weight:600;color:#374151;">${hjelpeLedetekst}</p>`
+}
+
+/**
+ * Deterministisk HTML for tilbudstekst: linjebasert struktur (tittel, metadata-tabell, --- som luft,
+ * seksjonstitler, «Totalt inkl. mva»-trykk, lister, avsnitt). Endrer ikke AI-tekstens ordlyd — samme
+ * tegnrekkefølge per linje bortsett fra `---` som vises som vertikal luft (visuelt skille, ikke innhold).
+ */
+function generertTekstTilVisningsHtml(generertTekst: string): string {
+  const lines = generertTekst.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  let i = 0
+  const n = lines.length
+  const buf: string[] = []
+
+  const flushParagraph = () => {
+    if (buf.length === 0) return
+    const inner = buf.map(l => formatInlineMarkdownOgEscape(l)).join('<br/>')
+    out.push(`<p style="margin:0 0 12px 0;line-height:1.6;color:#27272a;">${inner}</p>`)
+    buf.length = 0
+  }
+
+  const skipBlanks = () => {
+    while (i < n && lines[i].trim() === '') i++
+  }
+
+  skipBlanks()
+  if (i < n && erTilbudTittellinje(lines[i])) {
+    out.push(
+      `<h1 style="margin:0 0 20px 0;padding:0;font-size:20px;font-weight:700;color:#18181b;line-height:1.3;font-family:inherit;">${formatInlineMarkdownOgEscape(lines[i].trimEnd())}</h1>`
+    )
+    i++
+  }
+  skipBlanks()
+
+  while (i < n) {
+    const trimmed = lines[i].trim()
+    const lineEnd = lines[i].trimEnd()
+
+    if (trimmed === '') {
+      flushParagraph()
+      i++
+      continue
+    }
+
+    if (/^-{3,}$/.test(trimmed)) {
+      flushParagraph()
+      out.push('<div style="height:20px;line-height:20px;font-size:0;">&nbsp;</div>')
+      i++
+      continue
+    }
+
+    if (/^[─━_\u2500\u2501\s]{5,}$/.test(trimmed) && /[─━_\u2500\u2501]/.test(trimmed)) {
+      flushParagraph()
+      out.push('<div style="height:20px;line-height:20px;font-size:0;">&nbsp;</div>')
+      i++
+      continue
+    }
+
+    if (META_LINJE.test(lineEnd)) {
+      flushParagraph()
+      const rows: string[] = []
+      while (i < n && META_LINJE.test(lines[i].trimEnd())) {
+        rows.push(lines[i].trimEnd())
+        i++
+      }
+      out.push(
+        `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 16px 0;font-size:13px;line-height:1.45;color:#52525b;">${rows
+          .map(
+            r =>
+              `<tr><td style="padding:2px 0;">${formatInlineMarkdownOgEscape(r)}</td></tr>`
+          )
+          .join('')}</table>`
+      )
+      continue
+    }
+
+    if (/^(Dette er inkludert|Viktig å merke seg|Pris):/.test(trimmed)) {
+      flushParagraph()
+      out.push(
+        `<p style="margin:20px 0 6px 0;font-size:14px;font-weight:600;color:#18181b;line-height:1.35;">${formatInlineMarkdownOgEscape(lineEnd)}</p>`
+      )
+      i++
+      continue
+    }
+
+    if (/Totalt\s+inkl\.\s*mva\s*:/i.test(lineEnd)) {
+      flushParagraph()
+      out.push(
+        `<p style="margin:18px 0 0 0;font-size:17px;font-weight:700;color:#18181b;line-height:1.4;">${formatInlineMarkdownOgEscape(lineEnd)}</p>`
+      )
+      i++
+      continue
+    }
+
+    if (/^##\s+/.test(trimmed)) {
+      flushParagraph()
+      const rest = lines[i].replace(/^##\s+/, '').trimEnd()
+      out.push(
+        `<h2 style="margin:18px 0 6px 0;font-size:15px;font-weight:600;color:#27272a;line-height:1.35;">${formatInlineMarkdownOgEscape(rest)}</h2>`
+      )
+      i++
+      continue
+    }
+
+    if (/^#\s+/.test(trimmed) && !/^##/.test(trimmed)) {
+      flushParagraph()
+      const rest = lines[i].replace(/^#\s+/, '').trimEnd()
+      out.push(
+        `<h1 style="margin:18px 0 6px 0;font-size:17px;font-weight:700;color:#18181b;line-height:1.3;">${formatInlineMarkdownOgEscape(rest)}</h1>`
+      )
+      i++
+      continue
+    }
+
+    if (/^\s*-\s+/.test(lines[i])) {
+      flushParagraph()
+      const items: string[] = []
+      while (i < n && /^\s*-\s+/.test(lines[i])) {
+        items.push(lines[i].trimEnd().replace(/^\s*-\s+/, ''))
+        i++
+      }
+      out.push(
+        `<ul style="margin:4px 0 14px 0;padding:0 0 0 20px;color:#27272a;">${items
+          .map(
+            it =>
+              `<li style="margin:0 0 6px 0;line-height:1.55;">${formatInlineMarkdownOgEscape(it)}</li>`
+          )
+          .join('')}</ul>`
+      )
+      continue
+    }
+
+    buf.push(lines[i])
+    i++
+  }
+  flushParagraph()
+  return out.join('')
+}
+
+/**
+ * Delt HTML-skjell for tilbud / påminnelse — én lys kolonne, minimalt krom, tabellayout for klienter.
+ * Lenker og knappetekster er uendret i innhold. `tekstHtml` kommer fra {@link generertTekstTilVisningsHtml}.
+ */
+function byggTilbudEpostDokumentHtml(input: {
+  kundeNavn: string
+  introEtterHeiHtml: string
+  tekstHtml: string
+  firmanavn: string
+  tilbudId: string
+  firmaTelefon?: string | null
+  firmaEpost?: string | null
+}): string {
+  const godkjennUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}?action=godkjenn`
+  const justeringUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}`
+  const kontaktHtml = byggEpostKontaktHjelpSeksjon(input.firmaTelefon, input.firmaEpost)
+
+  const fontStack = 'Arial,Helvetica,sans-serif'
+  const pageBg = '#f4f4f5'
+  const ink = '#18181b'
+  const link = '#166534'
+  const ctaBg = '#166534'
+  const offerRamme = '#e4e4e7'
+  const offerInnholdBg = '#ffffff'
+
+  return `<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta http-equiv="x-ua-compatible" content="ie=edge" />
+<title>Tilbud</title>
+</head>
+<body style="margin:0;padding:0;background-color:${pageBg};">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${pageBg};">
+<tr>
+<td align="center" style="padding:28px 20px 36px 20px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;">
+<tr>
+<td style="font-family:${fontStack};font-size:16px;line-height:1.55;color:${ink};">
+<p style="margin:0 0 28px 0;font-size:12px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#71717a;">Dorg · Håndverkerportal</p>
+<p style="margin:0 0 6px 0;font-size:16px;font-weight:600;color:${ink};">Hei ${input.kundeNavn},</p>
+${input.introEtterHeiHtml}
+<div style="height:22px;line-height:22px;font-size:0;">&nbsp;</div>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0;">
+<tr><td style="height:1px;background-color:${offerRamme};line-height:1px;font-size:0;">&nbsp;</td></tr>
+</table>
+<div style="height:20px;line-height:20px;font-size:0;">&nbsp;</div>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0;">
+<tr>
+<td style="background-color:${offerInnholdBg};border:1px solid ${offerRamme};border-radius:8px;padding:20px 18px;">
+${input.tekstHtml}
+</td>
+</tr>
+</table>
+<div style="height:28px;line-height:28px;font-size:0;">&nbsp;</div>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+<tr>
+<td align="left">
+<a href="${godkjennUrl}" style="display:inline-block;padding:14px 24px;background-color:${ctaBg};color:#ffffff;font-family:${fontStack};font-size:16px;font-weight:600;text-decoration:none;border-radius:4px;">Godkjenn tilbud</a>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 0 0 0;text-align:left;">
+<a href="${justeringUrl}" style="font-family:${fontStack};font-size:15px;color:${link};text-decoration:underline;">Spørsmål eller endringer? Gi oss beskjed →</a>
+</td>
+</tr>
+</table>
+<div style="height:28px;line-height:28px;font-size:0;">&nbsp;</div>
+${kontaktHtml}
+<p style="margin:22px 0 0 0;font-size:12px;line-height:1.5;color:#71717a;">Fungerer ikke knappene? Åpne denne lenken: <a href="${justeringUrl}" style="color:${link};text-decoration:underline;word-break:break-all;">${justeringUrl}</a></p>
+<p style="margin:28px 0 0 0;font-size:11px;line-height:1.45;color:#a1a1aa;">Sendt via DORG Håndverkerportal</p>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>`
 }
 
 function byggHtmlBody(input: SendTilbudEpostInput): string {
-  const tekstHtml = input.generertTekst
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/## (.*?)(\n|$)/g, '<h2 style="color:#1B4332;margin-top:20px">$1</h2>')
-    .replace(/# (.*?)(\n|$)/g, '<h1 style="color:#1B4332">$1</h1>')
-    .replace(/^- (.*?)(\n|$)/gm, '<li>$1</li>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br/>')
-  const godkjennUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}?action=godkjenn`
-  const justeringUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}`
+  const tekstHtml = generertTekstTilVisningsHtml(input.generertTekst)
+  const introEtterHeiHtml = `<p style="margin:8px 0 0 0;font-size:15px;line-height:1.55;color:#52525b;">Du har mottatt et tilbud fra <strong style="color:#18181b;">${input.firmanavn}</strong>.</p>`
 
-  return `
-    <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.6;max-width:600px;margin:0 auto;padding:20px">
-      <div style="background:#1B4332;padding:20px;border-radius:8px 8px 0 0;text-align:center">
-        <h1 style="color:#fff;margin:0;letter-spacing:4px;font-size:24px">DORG</h1>
-        <p style="color:#4CAF82;margin:4px 0 0;font-size:13px">Håndverkerportal</p>
-      </div>
-      <div style="border:1px solid #E2E8E4;border-top:none;padding:32px;border-radius:0 0 8px 8px">
-        <p>Hei ${input.kundeNavn},</p>
-        <p>Du har mottatt et tilbud fra <strong>${input.firmanavn}</strong>.</p>
-        <hr style="border:none;border-top:1px solid #E2E8E4;margin:24px 0"/>
-        <div style="background:#F5F4F0;padding:20px;border-radius:8px">
-          <p>${tekstHtml}</p>
-        </div>
-        <div style="margin: 32px 0; display: flex;
-          flex-direction: column; gap: 12px;">
-
-          <a href="${godkjennUrl}"
-            style="display: block; background: #1B4332;
-            color: #ffffff; text-decoration: none;
-            text-align: center; padding: 16px 24px;
-            border-radius: 12px; font-size: 16px;
-            font-weight: 700;">
-            ✓ Godkjenn tilbud
-          </a>
-
-          <a href="${justeringUrl}"
-            style="display: block; background: #ffffff;
-            color: #374151; text-decoration: none;
-            text-align: center; padding: 14px 24px;
-            border-radius: 12px; font-size: 14px;
-            font-weight: 500; border: 1.5px solid #E5E7EB;">
-            Spørsmål eller endringer? Gi oss beskjed →
-          </a>
-
-        </div>
-
-        <div style="font-size: 12px; color: #9CA3AF;
-          margin-top: 16px;">
-          Fungerer ikke knappene? Kopier denne lenken:
-          ${justeringUrl}
-        </div>
-        <hr style="border:none;border-top:1px solid #E2E8E4;margin:24px 0"/>
-        <p style="color:#6B7280;font-size:13px">
-          Hvis du har spørsmål kan du svare direkte på denne e-posten.
-        </p>
-        <p>Med vennlig hilsen,<br/><strong>${input.firmanavn}</strong></p>
-      </div>
-      <p style="text-align:center;font-size:11px;color:#9CA3AF;margin-top:16px">
-        Sendt via DORG Håndverkerportal
-      </p>
-    </div>
-  `
+  return byggTilbudEpostDokumentHtml({
+    introEtterHeiHtml,
+    tekstHtml,
+    firmanavn: input.firmanavn,
+    tilbudId: input.tilbudId,
+    kundeNavn: input.kundeNavn,
+    firmaTelefon: input.firmaTelefon,
+    firmaEpost: input.firmaEpost,
+  })
 }
 
 function byggResendConfigFeil(): string | null {
@@ -109,61 +331,18 @@ function byggPaminnelseHtmlBody(input: SendTilbudEpostInput, erSiste: boolean): 
     ? `Dette er en siste påminnelse om tilbudet du mottok fra <strong>${input.firmanavn}</strong>. Vi vil gjerne høre fra deg.`
     : `Vi vil minne deg på tilbudet du mottok fra <strong>${input.firmanavn}</strong>.`
 
-  const tekstHtml = input.generertTekst
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/## (.*?)(\n|$)/g, '<h2 style="color:#1B4332;margin-top:20px">$1</h2>')
-    .replace(/# (.*?)(\n|$)/g, '<h1 style="color:#1B4332">$1</h1>')
-    .replace(/^- (.*?)(\n|$)/gm, '<li>$1</li>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br/>')
-  const godkjennUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}?action=godkjenn`
-  const justeringUrl = `${TILBUD_BASE_URL}/t/${input.tilbudId}`
+  const tekstHtml = generertTekstTilVisningsHtml(input.generertTekst)
+  const introEtterHeiHtml = `<p style="margin:8px 0 0 0;font-size:15px;line-height:1.55;color:#52525b;">${innledning}</p>`
 
-  return `
-    <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.6;max-width:600px;margin:0 auto;padding:20px">
-      <div style="background:#1B4332;padding:20px;border-radius:8px 8px 0 0;text-align:center">
-        <h1 style="color:#fff;margin:0;letter-spacing:4px;font-size:24px">DORG</h1>
-        <p style="color:#4CAF82;margin:4px 0 0;font-size:13px">Håndverkerportal</p>
-      </div>
-      <div style="border:1px solid #E2E8E4;border-top:none;padding:32px;border-radius:0 0 8px 8px">
-        <p>Hei ${input.kundeNavn},</p>
-        <p>${innledning}</p>
-        <hr style="border:none;border-top:1px solid #E2E8E4;margin:24px 0"/>
-        <div style="background:#F5F4F0;padding:20px;border-radius:8px">
-          <p>${tekstHtml}</p>
-        </div>
-        <div style="margin: 32px 0; display: flex; flex-direction: column; gap: 12px;">
-          <a href="${godkjennUrl}"
-            style="display: block; background: #1B4332;
-            color: #ffffff; text-decoration: none;
-            text-align: center; padding: 16px 24px;
-            border-radius: 12px; font-size: 16px;
-            font-weight: 700;">
-            ✓ Godkjenn tilbud
-          </a>
-          <a href="${justeringUrl}"
-            style="display: block; background: #ffffff;
-            color: #374151; text-decoration: none;
-            text-align: center; padding: 14px 24px;
-            border-radius: 12px; font-size: 14px;
-            font-weight: 500; border: 1.5px solid #E5E7EB;">
-            Spørsmål eller endringer? Gi oss beskjed →
-          </a>
-        </div>
-        <div style="font-size: 12px; color: #9CA3AF; margin-top: 16px;">
-          Fungerer ikke knappene? Kopier denne lenken: ${justeringUrl}
-        </div>
-        <hr style="border:none;border-top:1px solid #E2E8E4;margin:24px 0"/>
-        <p style="color:#6B7280;font-size:13px">
-          Hvis du har spørsmål kan du svare direkte på denne e-posten.
-        </p>
-        <p>Med vennlig hilsen,<br/><strong>${input.firmanavn}</strong></p>
-      </div>
-      <p style="text-align:center;font-size:11px;color:#9CA3AF;margin-top:16px">
-        Sendt via DORG Håndverkerportal
-      </p>
-    </div>
-  `
+  return byggTilbudEpostDokumentHtml({
+    kundeNavn: input.kundeNavn,
+    introEtterHeiHtml,
+    tekstHtml,
+    firmanavn: input.firmanavn,
+    tilbudId: input.tilbudId,
+    firmaTelefon: input.firmaTelefon,
+    firmaEpost: input.firmaEpost,
+  })
 }
 
 // Sends a reminder email for an existing offer. Uses a different subject line

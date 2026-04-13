@@ -7,7 +7,12 @@
     "start:tunnel": "expo start --tunnel",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "postinstall": "node scripts/patch-chromium-edge-launcher-rimraf.js",
+    "graph:flow-1": "npx madge --extensions ts,tsx --exclude \"node_modules|\\.expo\" --image docs/graphs/flow-1-create-offer.svg hooks/useNyttTilbudFlyt.ts components/NyttTilbudModal.tsx",
+    "graph:flow-2": "npx madge --extensions ts,tsx --exclude \"node_modules|\\.expo\" --image docs/graphs/flow-2-send-update.svg components/NyttTilbudModal.tsx components/TilbudDetaljerModal.tsx",
+    "graph:flow-3": "npx madge --extensions ts,tsx --exclude \"node_modules|\\.expo\" --image docs/graphs/flow-3-justering.svg components/TilbudDetaljerModal.tsx",
+    "graph:all": "npm run graph:flow-1 && npm run graph:flow-2 && npm run graph:flow-3"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.2.3",
@@ -50,5 +55,10 @@
     "@babel/core": "^7.24.0",
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "glob": "^13.0.6",
+    "rimraf": "^5.0.10",
+    "test-exclude": "^8.0.0"
   }
 }

@@ -2,7 +2,21 @@ import { memo } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import { requestOfferFlowRecordingDemo } from '../lib/demoRecording/offerFlowDemoBus'
+import { isOfferFlowRecordingDemoEnabled } from '../lib/demoRecording/offerFlowDemoFlags'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+
+/** Padding below status bar (inside TopBar). */
+export const TOP_BAR_EXTRA_TOP = 6
+/** Bottom padding of the bar row. */
+export const TOP_BAR_PADDING_BOTTOM = 6
+/** Min height of the logo/actions row (matches icon hit areas). */
+export const TOP_BAR_ROW_MIN = 36
+
+/** Total height from screen top to bottom of TopBar when `absolute={false}` — use for list underlap. */
+export function getTopBarOuterHeight(insetsTop: number) {
+  return insetsTop + TOP_BAR_EXTRA_TOP + TOP_BAR_ROW_MIN + TOP_BAR_PADDING_BOTTOM
+}
 
 interface Props {
   absolute?: boolean
@@ -13,9 +27,30 @@ function TopBar({ absolute = true }: Props) {
   const insets = useSafeAreaInsets()
 
   return (
-    <View style={[styles.container, absolute && styles.containerAbsolute, { paddingTop: insets.top + 8 }]}>
+    <View
+      style={[
+        styles.container,
+        absolute && styles.containerAbsolute,
+        { paddingTop: insets.top + TOP_BAR_EXTRA_TOP, paddingBottom: TOP_BAR_PADDING_BOTTOM },
+      ]}
+    >
       <Text style={styles.logo}>DORG</Text>
       <View style={styles.actions}>
+        {isOfferFlowRecordingDemoEnabled() ? (
+          <TouchableOpacity
+            style={styles.demoButton}
+            onPress={() => {
+              router.push('/(tabs)/tilbud')
+              setTimeout(() => {
+                requestOfferFlowRecordingDemo()
+              }, 280)
+            }}
+            accessibilityLabel="Start opptaksdemo tilbudsflyt"
+            activeOpacity={0.82}
+          >
+            <Ionicons name="videocam-outline" size={17} color="#166534" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={styles.demoButton}
           onPress={() => router.push({ pathname: '/bedrift', params: { demoOnboarding: '1' } })}
@@ -44,8 +79,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: TOP_BAR_ROW_MIN,
     paddingHorizontal: 20,
-    paddingBottom: 12,
     backgroundColor: 'transparent',
   },
   containerAbsolute: {
@@ -68,20 +103,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   demoButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.72)',
-    borderWidth: 1,
-    borderColor: 'rgba(17,17,17,0.08)',
+    backgroundColor: 'transparent',
   },
   iconBtn: {
     position: 'relative',
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',

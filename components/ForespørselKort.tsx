@@ -50,7 +50,12 @@ function UtkastForespørselKort({
     >
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          <Text style={styles.kundeNavn} numberOfLines={1}>
+          <Text
+            style={styles.kundeNavn}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.62}
+          >
             {tittel}
           </Text>
           <Ionicons name="chevron-forward" size={16} color="#888888" />
@@ -126,6 +131,8 @@ function ForespørselKortInner({ forespørsel, firma, onOppdater }: Props) {
         generertTekst,
         prisEksMva: prisEksMva,
         tilbudId: forespørsel.id,
+        firmaTelefon: firma.telefon,
+        firmaEpost: firma.epost,
       })
       await registrerForsteTilbudSendt({
         tilbudId: forespørsel.id,
@@ -420,6 +427,7 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_700Bold',
     color: '#111111',
     flex: 1,
+    minWidth: 0,
   },
   chevronButton: {
     width: 34,
