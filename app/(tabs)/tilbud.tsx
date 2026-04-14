@@ -15,9 +15,10 @@ import {
   UIManager,
   Animated,
   Easing,
+  AppState,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
 import * as Haptics from 'expo-haptics'
@@ -26,7 +27,6 @@ import {
   supabase,
   hentSendteTilbud,
   hentFirma,
-  markerSomLest,
   slettTilbud,
 } from '../../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../../lib/firmaCache'
@@ -58,6 +58,12 @@ import {
 } from '../../lib/demoRecording/offerFlowDemoConfig'
 import { isOfferFlowRecordingDemoEnabled } from '../../lib/demoRecording/offerFlowDemoFlags'
 import { sleep } from '../../lib/demoRecording/offerFlowDemoPrimitives'
+import {
+  byggHandlingSjefHint,
+  skalVisePillGodkjent,
+  skalVisePillJustering,
+} from '../../lib/tilbudNotifLogikk'
+import { hentTilbudPillAck, lagreTilbudPillAckDel } from '../../lib/tilbudPillAckStorage'
 
 type FilterLabel = 'Sendt' | 'Justering' | 'Godkjent' | 'Alle'
 
@@ -82,10 +88,6 @@ const filterStatuser: Record<FilterLabel, string[] | null> = {
   Justering: ['justering'],
   Godkjent: ['godkjent'],
   Alle: null,
-}
-
-function tellUleste(tilbud: Forespørsel[], status: string): number {
-  return tilbud.filter(t => t.status === status && !t.settSomLest).length
 }
 
 const listAnimationConfig = {
@@ -129,12 +131,29 @@ async function giSwipeHaptikk() {
   }
 }
 
+function enkelSøkeparam(v: string | string[] | undefined): string | undefined {
+  if (v == null) return undefined
+  return Array.isArray(v) ? v[0] : v
+}
+
 export default function TilbudScreen() {
+  const router = useRouter()
   const insets = useSafeAreaInsets()
+  const { openTilbudId: openTilbudIdRaw, tilbudOpenNonce: tilbudOpenNonceRaw } =
+    useLocalSearchParams<{
+      openTilbudId?: string | string[]
+      tilbudOpenNonce?: string | string[]
+    }>()
+  const openTilbudIdParam = enkelSøkeparam(openTilbudIdRaw)
+  const tilbudOpenNonce = enkelSøkeparam(tilbudOpenNonceRaw)
 
   const nudgeAnim = useRef(new Animated.Value(0)).current
   const tilbudRef = useRef<Forespørsel[]>([])
+  const skjulteIdsRef = useRef<string[]>([])
+  const appStateRef = useRef(AppState.currentState)
+  const sisteForegroundHintMs = useRef(0)
   const nudgeKjørtForFokusRef = useRef(0)
+  const sisteHåndterteTilbudOpenNonceRef = useRef<string | null>(null)
 
   const [tilbud, setTilbud] = useState<Forespørsel[]>([])
   const [skjulteTilbudIds, setSkjulteTilbudIds] = useState<string[]>([])
@@ -142,6 +161,8 @@ export default function TilbudScreen() {
   const [laster, setLaster] = useState(true)
   const [refresher, setRefresher] = useState(false)
   const [aktivFilter, setAktivFilter] = useState<FilterLabel>('Sendt')
+  const [pillAck, setPillAck] = useState({ justeringAckAt: 0, godkjentAckAt: 0 })
+  const [pillAckKlar, setPillAckKlar] = useState(false)
   const [fokusNudgeVersjon, setFokusNudgeVersjon] = useState(0)
   const tilbudFlyt = useNyttTilbudFlyt()
   const jobbtyperListe = useMemo(() => hentTilbudJobbtyper(firma), [firma])
@@ -175,6 +196,10 @@ export default function TilbudScreen() {
   useEffect(() => {
     tilbudRef.current = tilbud
   }, [tilbud])
+
+  useEffect(() => {
+    skjulteIdsRef.current = skjulteTilbudIds
+  }, [skjulteTilbudIds])
 
   const hentTilbud = useCallback(async () => {
     try {
@@ -300,20 +325,61 @@ export default function TilbudScreen() {
     [tilbudListe]
   )
 
-  const antallJustering = useMemo(
-    () => tellUleste(tilbudListe, 'justering'),
-    [tilbudListe]
+  const prikkJustering = useMemo(
+    () =>
+      pillAckKlar && skalVisePillJustering(tilbudListe, pillAck.justeringAckAt),
+    [pillAckKlar, tilbudListe, pillAck.justeringAckAt]
   )
 
-  const antallGodkjent = useMemo(
-    () => tellUleste(tilbudListe, 'godkjent'),
-    [tilbudListe]
+  const prikkGodkjent = useMemo(
+    () =>
+      pillAckKlar && skalVisePillGodkjent(tilbudListe, pillAck.godkjentAckAt),
+    [pillAckKlar, tilbudListe, pillAck.godkjentAckAt]
   )
 
-  const antallTotalt = antallJustering + antallGodkjent
+  const tabBadgeTeller = prikkJustering || prikkGodkjent ? 1 : 0
 
   const oppsummering = `${aktivtAntall} aktive · kr ${aktivVerdi.toLocaleString('nb-NO')} totalt`
   const firmaId = firma?.id
+
+  useEffect(() => {
+    if (!firmaId) {
+      setPillAckKlar(false)
+      return
+    }
+    let avbrutt = false
+    setPillAckKlar(false)
+    void (async () => {
+      const ack = await hentTilbudPillAck(firmaId)
+      if (!avbrutt) {
+        setPillAck(prev => ({
+          justeringAckAt: Math.max(ack.justeringAckAt, prev.justeringAckAt),
+          godkjentAckAt: Math.max(ack.godkjentAckAt, prev.godkjentAckAt),
+        }))
+        setPillAckKlar(true)
+      }
+    })()
+    return () => {
+      avbrutt = true
+    }
+  }, [firmaId])
+
+  const håndterFilterTrykk = useCallback(
+    (filter: FilterLabel) => {
+      setAktivFilter(filter)
+      if (!firmaId) return
+      setPillAckKlar(true)
+      const ts = Date.now()
+      if (filter === 'Justering') {
+        setPillAck(p => ({ ...p, justeringAckAt: Math.max(p.justeringAckAt, ts) }))
+        void lagreTilbudPillAckDel(firmaId, 'justering', ts)
+      } else if (filter === 'Godkjent') {
+        setPillAck(p => ({ ...p, godkjentAckAt: Math.max(p.godkjentAckAt, ts) }))
+        void lagreTilbudPillAckDel(firmaId, 'godkjent', ts)
+      }
+    },
+    [firmaId]
+  )
 
   const swipeData = useMemo<SwipeListItem[]>(
     () =>
@@ -331,8 +397,25 @@ export default function TilbudScreen() {
   const førsteKortKey = swipeData[0]?.rowKey
 
   useEffect(() => {
-    oppdaterBadge(antallTotalt)
-  }, [antallTotalt])
+    oppdaterBadge(tabBadgeTeller)
+  }, [tabBadgeTeller])
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', next => {
+      const prev = appStateRef.current
+      appStateRef.current = next
+      if (next !== 'active') return
+      if (prev !== 'inactive' && prev !== 'background') return
+      const now = Date.now()
+      if (now - sisteForegroundHintMs.current < 120_000) return
+      const liste = tilbudRef.current.filter(t => !skjulteIdsRef.current.includes(t.id))
+      const hint = byggHandlingSjefHint(liste)
+      if (!hint) return
+      sisteForegroundHintMs.current = now
+      visToast(hint, 'suksess')
+    })
+    return () => sub.remove()
+  }, [visToast])
 
   useEffect(() => {
     nudgeAnim.stopAnimation()
@@ -367,40 +450,38 @@ export default function TilbudScreen() {
     }
   }, [førsteKortKey, fokusNudgeVersjon, nudgeAnim])
 
-  const åpneTilbud = useCallback(
-    async (nesteTilbud: Forespørsel) => {
-      void prefetchTilbudHendelser(nesteTilbud.id)
-      const skalMarkeresSomLest =
-        (nesteTilbud.status === 'godkjent' || nesteTilbud.status === 'justering') &&
-        !nesteTilbud.settSomLest
+  const åpneTilbud = useCallback(async (nesteTilbud: Forespørsel) => {
+    void prefetchTilbudHendelser(nesteTilbud.id)
+    setValgtTilbud(nesteTilbud)
+  }, [])
 
-      const tilbudForModal = skalMarkeresSomLest
-        ? { ...nesteTilbud, settSomLest: true }
-        : nesteTilbud
-
-      setValgtTilbud(tilbudForModal)
-
-      if (!skalMarkeresSomLest) {
-        return
+  /** Snarvei fra Forespørsler-fanen: åpne tilbudsdetaljer når index sender params (én gang per nonce). */
+  useEffect(() => {
+    if (!openTilbudIdParam || !tilbudOpenNonce || laster) {
+      return
+    }
+    if (sisteHåndterteTilbudOpenNonceRef.current === tilbudOpenNonce) {
+      return
+    }
+    const rad = tilbud.find(t => t.id === openTilbudIdParam)
+    if (!rad) {
+      if (!laster) {
+        sisteHåndterteTilbudOpenNonceRef.current = tilbudOpenNonce
+        void router.setParams({
+          openTilbudId: undefined,
+          tilbudOpenNonce: undefined,
+        })
       }
-
-      setTilbud(prev =>
-        prev.map(tilbudItem =>
-          tilbudItem.id === nesteTilbud.id
-            ? { ...tilbudItem, settSomLest: true }
-            : tilbudItem
-        )
-      )
-
-      try {
-        await markerSomLest(nesteTilbud.id)
-      } catch (error) {
-        console.error('Feil ved markering som lest:', error)
-        void hentTilbud()
-      }
-    },
-    [hentTilbud]
-  )
+      return
+    }
+    sisteHåndterteTilbudOpenNonceRef.current = tilbudOpenNonce
+    setAktivFilter('Alle')
+    void åpneTilbud(rad)
+    void router.setParams({
+      openTilbudId: undefined,
+      tilbudOpenNonce: undefined,
+    })
+  }, [openTilbudIdParam, tilbudOpenNonce, laster, tilbud, åpneTilbud, router])
 
   useEffect(() => {
     if (!opptaksPostSendVentPåKortId) return
@@ -479,22 +560,14 @@ export default function TilbudScreen() {
             setTilbud(prev =>
               prev.map(item =>
                 item.id === tilbudId
-                  ? {
-                      ...item,
-                      status: nyStatus as Forespørsel['status'],
-                      settSomLest: false,
-                    }
+                  ? { ...item, status: nyStatus as Forespørsel['status'] }
                   : item
               )
             )
 
             setValgtTilbud(prev =>
               prev?.id === tilbudId
-                ? {
-                    ...prev,
-                    status: nyStatus as Forespørsel['status'],
-                    settSomLest: false,
-                  }
+                ? { ...prev, status: nyStatus as Forespørsel['status'] }
                 : prev
             )
             return
@@ -579,12 +652,12 @@ export default function TilbudScreen() {
         <View style={styles.filterSection}>
           <View style={styles.filterRow}>
             {FILTRE.map(filter => {
-              const badgeCount =
+              const visPrikk =
                 filter === 'Justering'
-                  ? antallJustering
+                  ? prikkJustering
                   : filter === 'Godkjent'
-                    ? antallGodkjent
-                    : undefined
+                    ? prikkGodkjent
+                    : false
 
               return (
                 <View key={filter} style={styles.filterPillWrap}>
@@ -593,7 +666,7 @@ export default function TilbudScreen() {
                       styles.filterPill,
                       aktivFilter === filter ? styles.filterPillActive : styles.filterPillInactive,
                     ]}
-                    onPress={() => setAktivFilter(filter)}
+                    onPress={() => håndterFilterTrykk(filter)}
                     activeOpacity={0.86}
                   >
                     <Text
@@ -605,7 +678,7 @@ export default function TilbudScreen() {
                       {filter}
                     </Text>
                   </TouchableOpacity>
-                  {badgeCount !== undefined ? <NotificationBadge count={badgeCount} /> : null}
+                  {visPrikk ? <NotificationBadge visible variant="attention" /> : null}
                 </View>
               )
             })}
@@ -613,7 +686,7 @@ export default function TilbudScreen() {
         </View>
       </>
     ),
-    [aktivFilter, antallGodkjent, antallJustering, oppsummering]
+    [aktivFilter, håndterFilterTrykk, oppsummering, prikkGodkjent, prikkJustering]
   )
 
   const listFooter = useMemo(

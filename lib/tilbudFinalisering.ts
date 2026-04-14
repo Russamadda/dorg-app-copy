@@ -5,21 +5,60 @@ export const STANDARD_OPPSTART_SETNING = 'Vi tar kontakt for å avtale oppstarts
 
 const META_SEP = '\n---\n'
 
+/** Overskriftslinjen ligger inni regex-treffet; plukkes ut så den kan settes inn igjen ved sammenslåing. */
+function ekstraherArbeidslisteOverskrift(fradelingsMatch: string): string {
+  const linje = fradelingsMatch.trim().split(/\r?\n/)[0]?.trim() ?? ''
+  return linje.length > 0 ? linje : 'Dette er avtalt:'
+}
+
 /**
- * Finner hvor brødteksten etter `---` skal deles før «Dette er inkludert:».
+ * Finner hvor brødteksten etter `---` skal deles før arbeidslisten («Dette er avtalt:» eller eldre «Dette er inkludert:»).
  * Tolerant for \r\n, ekstra mellomrom og kolon-variant — slik at vi ikke feiler og
  * erstatter modellens intro med tom streng / standardtekst.
  */
-function finnDelingFørDetteErInkludert(body: string): { introSliceEnd: number; tailSliceStart: number } | null {
-  const reMedNl = /\r?\n[\t ]*Dette[\t ]+er[\t ]+inkludert[\t ]*:[\t ]*/i
-  const m = reMedNl.exec(body)
-  if (m && m.index !== undefined) {
-    return { introSliceEnd: m.index, tailSliceStart: m.index + m[0].length }
+function finnDelingFørDetteErInkludert(body: string): {
+  introSliceEnd: number
+  tailSliceStart: number
+  arbeidslisteOverskrift: string
+} | null {
+  const etterNl = [
+    /\r?\n[\t ]*Dette[\t ]+er[\t ]+inkludert[\t ]*:[\t ]*/i,
+    /\r?\n[\t ]*Dette[\t ]+er[\t ]+avtalt[\t ]*:[\t ]*/i,
+  ]
+  const vedStart = [
+    /^[\t ]*Dette[\t ]+er[\t ]+inkludert[\t ]*:[\t ]*/im,
+    /^[\t ]*Dette[\t ]+er[\t ]+avtalt[\t ]*:[\t ]*/im,
+  ]
+
+  let best: { introSliceEnd: number; tailSliceStart: number; matchText: string } | null = null
+  for (const re of etterNl) {
+    const m = re.exec(body)
+    if (m && m.index !== undefined) {
+      const cand = {
+        introSliceEnd: m.index,
+        tailSliceStart: m.index + m[0].length,
+        matchText: m[0],
+      }
+      if (!best || cand.introSliceEnd < best.introSliceEnd) best = cand
+    }
   }
-  const reStart = /^[\t ]*Dette[\t ]+er[\t ]+inkludert[\t ]*:[\t ]*/im
-  const m2 = reStart.exec(body)
-  if (m2 && m2.index === 0) {
-    return { introSliceEnd: 0, tailSliceStart: m2[0].length }
+  if (best) {
+    return {
+      introSliceEnd: best.introSliceEnd,
+      tailSliceStart: best.tailSliceStart,
+      arbeidslisteOverskrift: ekstraherArbeidslisteOverskrift(best.matchText),
+    }
+  }
+
+  for (const re of vedStart) {
+    const m = re.exec(body)
+    if (m && m.index === 0) {
+      return {
+        introSliceEnd: 0,
+        tailSliceStart: m[0].length,
+        arbeidslisteOverskrift: ekstraherArbeidslisteOverskrift(m[0]),
+      }
+    }
   }
   return null
 }
@@ -73,9 +112,9 @@ function erstattOppstartSetninger(
 }
 
 /**
- * Oppdaterer meta (Til:-linje), bevarer modellens introduksjon mellom `---` og «Dette er inkludert:».
+ * Oppdaterer meta (Til:-linje), bevarer modellens introduksjon mellom `---` og arbeidslisten («Dette er avtalt:» / «Dette er inkludert:»).
  * Ved kontaktfinalisering endres kun: `Til:`-linje, «Hei Kunde» → ekte fornavn, og oppstartssetning
- * i brødteksten (under «Dette er inkludert») når dato er valgt. Ingen ekstra takk-/prisoverslag-linjer.
+ * i brødteksten (etter arbeidslisten) når dato er valgt. Ingen ekstra takk-/prisoverslag-linjer.
  */
 export function finaliserTilbudTekstSync(input: {
   tilbudTekst: string
@@ -104,9 +143,11 @@ export function finaliserTilbudTekstSync(input: {
   const tail = body.slice(deling.tailSliceStart).trimStart()
   const nyIntro = introRaw ? tilbudTekstMedKundenavn(introRaw, navn) : ''
   const tailMedOppstart = erstattOppstartSetninger(tail, input.foreslattOppstartTekst)
-  const midt = nyIntro ? `${nyIntro}\n\n` : ''
+  const overskrift = deling.arbeidslisteOverskrift
+  const kroppEtterIntro = `${overskrift}\n\n${tailMedOppstart}`
+  const midt = nyIntro ? `${nyIntro}\n\n${kroppEtterIntro}` : kroppEtterIntro
 
-  return `${head}${META_SEP}${midt}${tailMedOppstart}`
+  return `${head}${META_SEP}${midt}`
 }
 
 export function formaterOppstartDatoNb(d: Date): string {

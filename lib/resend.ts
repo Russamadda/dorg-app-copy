@@ -43,6 +43,83 @@ function erTilbudTittellinje(line: string): boolean {
   return /^(\*\*)?Tilbud\s*[–—\-]\s*.+/.test(line.trimEnd())
 }
 
+/** Horisontal skillelinje i tilbudstekst (markdown eller tegnet strek). */
+function erSkilleLinjeITekst(t: string): boolean {
+  return /^-{3,}$/.test(t) || (/^[─━_\u2500\u2501\s]{5,}$/.test(t) && /[─━_\u2500\u2501]/.test(t))
+}
+
+const PRIS_EPOST_RAMME = '#e4e4e7'
+
+/**
+ * Pakker «Pris:» … «Totalt inkl. mva:» i én e-postblokk med ramme over/under,
+ * så total ikke havner visuelt nær avslutning/hilsen (som tidligere egen `<p>` med stor margin etter dekorlinje).
+ */
+function prøvParsePrisSeksjonEpost(
+  lines: string[],
+  startIndex: number
+): { html: string; nextIndex: number } | null {
+  const n = lines.length
+  if (startIndex >= n || !/^Pris:\s*$/i.test(lines[startIndex].trim())) {
+    return null
+  }
+
+  let j = startIndex + 1
+  let totaltIdx = -1
+  while (j < n) {
+    const raw = lines[j]
+    const t = raw.trim()
+    if (t === '') {
+      j++
+      continue
+    }
+    if (erSkilleLinjeITekst(t)) {
+      j++
+      continue
+    }
+    if (/Totalt\s+inkl\.\s*mva\s*:/i.test(raw.trimEnd())) {
+      totaltIdx = j
+      break
+    }
+    if (/^(Dette er inkludert|Dette er avtalt|Viktig å merke seg)\s*:/i.test(t)) {
+      return null
+    }
+    if (/^(Med vennlig hilsen|Vi hører|Dette prisoverslaget)/i.test(t)) {
+      return null
+    }
+    j++
+  }
+  if (totaltIdx < 0) return null
+
+  const mids: string[] = []
+  j = startIndex + 1
+  while (j < totaltIdx) {
+    const t = lines[j].trim()
+    if (t === '' || erSkilleLinjeITekst(t)) {
+      j++
+      continue
+    }
+    mids.push(lines[j].trimEnd())
+    j++
+  }
+  const totaltLine = lines[totaltIdx].trimEnd()
+
+  const radHtml = mids
+    .map(
+      line =>
+        `<p style="margin:0 0 3px 0;font-size:14px;line-height:1.45;color:#52525b;">${formatInlineMarkdownOgEscape(line)}</p>`
+    )
+    .join('')
+
+  const inner =
+    `<p style="margin:0 0 8px 0;font-size:14px;font-weight:600;color:#18181b;line-height:1.35;">Pris:</p>` +
+    radHtml +
+    `<p style="margin:8px 0 0 0;font-size:17px;font-weight:700;color:#18181b;line-height:1.4;letter-spacing:-0.01em;">${formatInlineMarkdownOgEscape(totaltLine)}</p>`
+
+  const html = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 18px 0;border-top:1px solid ${PRIS_EPOST_RAMME};border-bottom:1px solid ${PRIS_EPOST_RAMME};padding:14px 0 14px 0;"><tr><td style="padding:0;">${inner}</td></tr></table>`
+
+  return { html, nextIndex: totaltIdx + 1 }
+}
+
 function byggEpostKontaktHjelpSeksjon(telefon: string | null | undefined, epost: string | null | undefined): string {
   const tel = telefon?.trim() ?? ''
   const mail = epost?.trim() ?? ''
@@ -50,7 +127,7 @@ function byggEpostKontaktHjelpSeksjon(telefon: string | null | undefined, epost:
   const link = 'color:#166534;text-decoration:underline;'
   const tittel = 'margin:0 0 8px 0;font-size:14px;font-weight:600;color:#374151;'
   const brød = 'margin:0;font-size:14px;line-height:1.55;color:#52525b;'
-  const hjelpeLedetekst = 'Har du spørsmål eller endringer til tilbudet?'
+  const hjelpeLedetekst = 'Lurer du på noe annet?'
   if (tel && mail) {
     return `<p style="${tittel}">${hjelpeLedetekst}</p>
 <p style="${brød}">Ring oss på <a href="tel:${escapeHtmlTekst(telHref)}" style="${link}">${escapeHtmlTekst(tel)}</a> eller send e-post til <a href="mailto:${escapeHtmlTekst(mail)}" style="${link}">${escapeHtmlTekst(mail)}</a>.</p>`
@@ -68,8 +145,8 @@ function byggEpostKontaktHjelpSeksjon(telefon: string | null | undefined, epost:
 
 /**
  * Deterministisk HTML for tilbudstekst: linjebasert struktur (tittel, metadata-tabell, --- som luft,
- * seksjonstitler, «Totalt inkl. mva»-trykk, lister, avsnitt). Endrer ikke AI-tekstens ordlyd — samme
- * tegnrekkefølge per linje bortsett fra `---` som vises som vertikal luft (visuelt skille, ikke innhold).
+ * seksjonstitler, lister, avsnitt). «Pris:»–«Totalt inkl. mva:» pakkes i én rammet e-postblokk.
+ * Endrer ikke AI-tekstens ordlyd — samme tegnrekkefølge per linje bortsett fra `---` som luft der det ikke er del av prisblokken.
  */
 function generertTekstTilVisningsHtml(generertTekst: string): string {
   const lines = generertTekst.replace(/\r\n/g, '\n').split('\n')
@@ -140,7 +217,24 @@ function generertTekstTilVisningsHtml(generertTekst: string): string {
       continue
     }
 
-    if (/^(Dette er inkludert|Viktig å merke seg|Pris):/.test(trimmed)) {
+    const prisBlokk = prøvParsePrisSeksjonEpost(lines, i)
+    if (prisBlokk) {
+      flushParagraph()
+      out.push(prisBlokk.html)
+      i = prisBlokk.nextIndex
+      continue
+    }
+
+    if (/^Pris:/i.test(trimmed)) {
+      flushParagraph()
+      out.push(
+        `<p style="margin:20px 0 6px 0;font-size:14px;font-weight:600;color:#18181b;line-height:1.35;">${formatInlineMarkdownOgEscape(lineEnd)}</p>`
+      )
+      i++
+      continue
+    }
+
+    if (/^(Dette er inkludert|Dette er avtalt|Viktig å merke seg):/.test(trimmed)) {
       flushParagraph()
       out.push(
         `<p style="margin:20px 0 6px 0;font-size:14px;font-weight:600;color:#18181b;line-height:1.35;">${formatInlineMarkdownOgEscape(lineEnd)}</p>`

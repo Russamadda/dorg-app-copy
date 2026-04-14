@@ -3,7 +3,19 @@ import { View, Text, StyleSheet, Pressable, Animated } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { beregnTilbudTotalInklMva } from '../lib/tilbudPris'
 import type { Forespørsel } from '../types'
-import { getTilbudKortStatus } from '../utils/tilbudStatus'
+import { getTilbudStatusPresentasjon, type TilbudStatusMeta } from '../utils/tilbudStatus'
+
+/** Én statuslinje uten å gjenta badge-prefiks som allerede ligger i subline (f.eks. «Sendt» + «Sendt i dag»). */
+function enLinjeStatusTekst(p: TilbudStatusMeta): string {
+  if (!p.subline?.trim()) return p.badge
+  const b = p.badge.trim()
+  const s = p.subline.trim()
+  if (s.toLowerCase().startsWith(b.toLowerCase())) {
+    return s
+  }
+  return `${b} · ${s}`
+}
+import { tilbudTrengerHandlingGlow } from '../lib/tilbudNotifLogikk'
 
 interface TilbudKortProps {
   tilbud: Forespørsel
@@ -29,11 +41,9 @@ function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: Til
   const demoTrykkScale = useRef(new Animated.Value(1)).current
   const totalInklMva = beregnTilbudTotalInklMva(tilbud)
   const tjenestetittel = tilbud.kortBeskrivelse ?? tilbud.jobbType ?? 'Tilbud'
-  const statusMeta = getTilbudKortStatus(tilbud)
+  const statusMeta = getTilbudStatusPresentasjon(tilbud)
   const datoTekst = formaterKortDato(tilbud)
-  const visUlestIndikator =
-    !tilbud.settSomLest &&
-    (tilbud.status === 'godkjent' || tilbud.status === 'justering')
+  const visUlestIndikator = tilbudTrengerHandlingGlow(tilbud)
   const ulestFarge = tilbud.status === 'godkjent' ? '#16A34A' : '#2563EB'
   const outlineOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -155,8 +165,8 @@ function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: Til
                   <View style={[styles.dot, { backgroundColor: statusMeta.dotColor }]} />
                 )}
 
-                <Text style={[styles.metaText, { color: statusMeta.color }]}>
-                  {statusMeta.label}
+                <Text style={[styles.metaText, { color: statusMeta.color }]} numberOfLines={2}>
+                  {enLinjeStatusTekst(statusMeta)}
                 </Text>
               </View>
             </View>
@@ -188,17 +198,27 @@ function erLikeTilbudKortProps(prev: TilbudKortProps, next: TilbudKortProps): bo
   return (
     a.id === b.id &&
     a.status === b.status &&
-    a.settSomLest === b.settSomLest &&
     a.kundeNavn === b.kundeNavn &&
     a.adresse === b.adresse &&
     a.sistSendtDato === b.sistSendtDato &&
     a.sendtDato === b.sendtDato &&
+    a.forsteSendtDato === b.forsteSendtDato &&
     a.opprettetDato === b.opprettetDato &&
     a.kortBeskrivelse === b.kortBeskrivelse &&
     a.jobbType === b.jobbType &&
     a.timer === b.timer &&
     a.materialkostnad === b.materialkostnad &&
-    a.prisEksMva === b.prisEksMva
+    a.prisEksMva === b.prisEksMva &&
+    a.versjon === b.versjon &&
+    a.godkjentDato === b.godkjentDato &&
+    a.avslattDato === b.avslattDato &&
+    a.justeringOnsketDato === b.justeringOnsketDato &&
+    a.antallPaminnelser === b.antallPaminnelser &&
+    a.forstePaminnelseSendtDato === b.forstePaminnelseSendtDato &&
+    a.sistePaminnelseSendtDato === b.sistePaminnelseSendtDato &&
+    a.forstePaminnelseDato === b.forstePaminnelseDato &&
+    a.sistePaminnelseDato === b.sistePaminnelseDato &&
+    a.sistOppdatertDato === b.sistOppdatertDato
   )
 }
 
@@ -300,17 +320,18 @@ const styles = StyleSheet.create({
   tjeneste: {
     width: '100%',
     minWidth: 0,
-    fontSize: 17,
-    lineHeight: 22,
-    fontFamily: 'DMSans_700Bold',
-    color: '#222222',
+    fontSize: 16,
+    lineHeight: 21,
+    fontFamily: 'DMSans_600SemiBold',
+    color: '#2A4D42',
   },
   footerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   metaRow: {
     flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',

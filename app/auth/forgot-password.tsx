@@ -1,19 +1,10 @@
 import { useState } from 'react'
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { Link } from 'expo-router'
-import { StatusBar } from 'expo-status-bar'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { Colors } from '../../constants/colors'
+import AuthShell from '../../components/auth/AuthShell'
+import AuthTextField from '../../components/auth/AuthTextField'
+import AuthPrimaryButton from '../../components/auth/AuthPrimaryButton'
+import { authOnboardingTheme } from '../../constants/authOnboardingTheme'
 import { lagAuthRedirectUrl, normaliserEpost, oversettAuthFeil } from '../../lib/auth'
 import { supabase } from '../../lib/supabase'
 
@@ -52,171 +43,60 @@ export default function ForgotPasswordScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style="dark" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.header}>
-            <Text style={styles.logo}>DORG</Text>
-            <Text style={styles.subheader}>Nullstill passord</Text>
-          </View>
+    <AuthShell>
+      <View style={styles.block}>
+        <Text style={authOnboardingTheme.brandTitle}>DORG</Text>
+        <Text style={authOnboardingTheme.brandSubtitle}>Nullstill passord</Text>
 
-          <View style={styles.form}>
-            <Text style={styles.beskrivelse}>
-              Skriv inn e-posten din, så sender vi deg en lenke for å sette nytt passord.
-            </Text>
+        <Text style={styles.body}>
+          Skriv inn e-posten din, så sender vi deg en lenke for å sette nytt passord.
+        </Text>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>E-POST</Text>
-              <TextInput
-                style={styles.input}
-                value={epost}
-                onChangeText={setEpost}
-                placeholder="din@epost.no"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
+        <AuthTextField
+          label="E-post"
+          value={epost}
+          onChangeText={setEpost}
+          placeholder="din@epost.no"
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
 
-            {info ? <Text style={styles.info}>{info}</Text> : null}
-            {feil ? <Text style={styles.feil}>{feil}</Text> : null}
+        {info ? <Text style={authOnboardingTheme.infoText}>{info}</Text> : null}
+        {feil ? <Text style={authOnboardingTheme.errorText}>{feil}</Text> : null}
 
-            <TouchableOpacity
-              style={[styles.knapp, laster && styles.knappDisabled]}
-              onPress={sendRecovery}
-              disabled={laster}
-            >
-              {laster ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.knappTekst}>Send lenke</Text>
-              )}
+        <AuthPrimaryButton label="Send lenke" onPress={() => void sendRecovery()} loading={laster} />
+
+        <View style={styles.backRow}>
+          <Link href="/auth" asChild>
+            <TouchableOpacity>
+              <Text style={authOnboardingTheme.link}>Tilbake til innlogging</Text>
             </TouchableOpacity>
-
-            <View style={styles.tilbakeRad}>
-              <Link href="/auth/login" asChild>
-                <TouchableOpacity>
-                  <Text style={styles.tilbakeLenke}>Tilbake til innlogging</Text>
-                </TouchableOpacity>
-              </Link>
-            </View>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          </Link>
+        </View>
+      </View>
+    </AuthShell>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 40,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  logo: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 32,
-    letterSpacing: 4,
-    color: Colors.primary,
-  },
-  subheader: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.textMuted,
-    marginTop: 4,
-  },
-  form: {
-    gap: 16,
-  },
-  beskrivelse: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    lineHeight: 21,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  fieldGroup: {
-    gap: 6,
-  },
-  label: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 11,
-    color: Colors.textMuted,
-    letterSpacing: 0.8,
-  },
-  input: {
-    height: 44,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    color: Colors.textPrimary,
-  },
-  info: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.infoText,
-    textAlign: 'center',
-    backgroundColor: Colors.infoBackground,
-    borderWidth: 1,
-    borderColor: Colors.infoBorder,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  feil: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 13,
-    color: Colors.danger,
-    textAlign: 'center',
-  },
-  knapp: {
-    height: 48,
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
+  block: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
     marginTop: 8,
   },
-  knappDisabled: {
-    opacity: 0.7,
-  },
-  knappTekst: {
-    fontFamily: 'DMSans_700Bold',
+  body: {
+    fontFamily: 'DMSans_400Regular',
     fontSize: 15,
-    color: '#fff',
+    lineHeight: 22,
+    color: '#5C6570',
+    textAlign: 'center',
+    marginTop: 20,
+    marginBottom: 8,
   },
-  tilbakeRad: {
+  backRow: {
     alignItems: 'center',
-    marginTop: 8,
-  },
-  tilbakeLenke: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 14,
-    color: Colors.primary,
-    textDecorationLine: 'underline',
+    marginTop: 20,
   },
 })

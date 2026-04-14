@@ -13,8 +13,10 @@ import {
 } from '@expo-google-fonts/dm-serif-display'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import type { Session } from '@supabase/supabase-js'
-import { hentAuthCallbackParams, normaliserEpost } from '../lib/auth'
-import { supabase } from '../lib/supabase'
+import { hentAuthCallbackParams } from '../lib/auth'
+import { erFirmaOppsettFullfort } from '../lib/firmaSetup'
+import { subscribeFirmaOppsettEndret } from '../lib/firmaSetupEvents'
+import { supabase, hentFirma } from '../lib/supabase'
 import { BRAND_BACKGROUND_BASE_COLOR, prefetchBrandBackground } from '../lib/backgroundConfig'
 
 void SplashScreen.preventAutoHideAsync().catch(() => {
@@ -34,7 +36,8 @@ export default function RootLayout() {
     DMSerifDisplay_400Regular,
   })
   const [session, setSession] = useState<Session | null | undefined>(undefined)
-  const devAutoLoginForsokt = useRef(false)
+  /** undefined = ikke avklart ennå (laster firma etter innlogging). */
+  const [firmaOppsettKlar, setFirmaOppsettKlar] = useState<boolean | undefined>(undefined)
 
   useEffect(() => {
     if ((fontsLoaded || fontError) && !splashHiddenRef.current) {
@@ -73,33 +76,35 @@ export default function RootLayout() {
     return () => subscription.unsubscribe()
   }, [router])
 
-  // Kun Expo/dev: logg inn automatisk hvis EXPO_PUBLIC_DEV_AUTO_LOGIN_* er satt (aldri i produksjon).
   useEffect(() => {
-    if (!__DEV__) {
+    if (session === undefined) {
       return
     }
-    if (session === undefined || session) {
-      return
+
+    let avbrutt = false
+
+    async function synkOppsett() {
+      if (!session?.user) {
+        if (!avbrutt) setFirmaOppsettKlar(undefined)
+        return
+      }
+      try {
+        const f = await hentFirma(session.user.id)
+        if (!avbrutt) setFirmaOppsettKlar(erFirmaOppsettFullfort(f))
+      } catch {
+        if (!avbrutt) setFirmaOppsettKlar(false)
+      }
     }
-    const epost = process.env.EXPO_PUBLIC_DEV_AUTO_LOGIN_EMAIL?.trim()
-    const passord = process.env.EXPO_PUBLIC_DEV_AUTO_LOGIN_PASSWORD
-    if (!epost || !passord) {
-      return
+
+    void synkOppsett()
+    const avmeld = subscribeFirmaOppsettEndret(() => {
+      void synkOppsett()
+    })
+
+    return () => {
+      avbrutt = true
+      avmeld()
     }
-    if (devAutoLoginForsokt.current) {
-      return
-    }
-    devAutoLoginForsokt.current = true
-    void supabase.auth
-      .signInWithPassword({
-        email: normaliserEpost(epost),
-        password: passord,
-      })
-      .then(({ error }) => {
-        if (error) {
-          console.warn('[dev] Auto-login feilet:', error.message)
-        }
-      })
   }, [session])
 
   useEffect(() => {
@@ -182,15 +187,27 @@ export default function RootLayout() {
     const inBedrift = rootSegment === 'bedrift'
     const inResetPassword = inAuth && segments[1] === 'reset-password'
 
-    if (session && !inTabs && !inBedrift && !inResetPassword) {
-      router.replace('/(tabs)')
+    if (!session) {
+      if (!inAuth) {
+        router.replace('/auth')
+      }
       return
     }
 
-    if (!session && !inAuth) {
-      router.replace('/auth/login')
+    if (firmaOppsettKlar === undefined) {
+      return
     }
-  }, [fontError, fontsLoaded, router, segments, session])
+
+    if (!firmaOppsettKlar && !inBedrift && !inResetPassword) {
+      router.replace('/bedrift')
+      return
+    }
+
+    if (firmaOppsettKlar && !inTabs && !inBedrift && !inResetPassword) {
+      router.replace('/(tabs)')
+      return
+    }
+  }, [fontError, fontsLoaded, firmaOppsettKlar, router, segments, session])
 
   if (!fontsLoaded && !fontError) {
     return null

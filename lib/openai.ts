@@ -51,7 +51,7 @@ Dato: [dato]
 
 
 
-Dette er inkludert:
+Dette er avtalt:
 
 - [Konkret punkt 1]
 
@@ -177,9 +177,9 @@ INGEN "OM JOBBEN"-SEKSJON
 
 IKKE ha en egen "Om jobben:"-seksjon.
 
-Kontekst gis i introduksjonsteksten — én setning.
+Kontekst gis i introduksjonsteksten — én kort setning etter hilsen.
 
-Deretter rett på "Dette er inkludert".
+Deretter overskriften "Dette er avtalt:" og arbeidslisten.
 
 
 
@@ -187,15 +187,17 @@ DÅRLIG:
 
 "Om jobben: Jobben omfatter riving av fliser..."
 
-"Dette er inkludert: - Riving av fliser..."
+"Dette er avtalt: - Riving av fliser..."
 
 
 
 GOD:
 
-"Hei Kari! Her er prisoverslaget på badet.
+"Hei Kari!
 
-Dette er inkludert:
+Takk for henvendelsen — her er prisoverslaget på badet.
+
+Dette er avtalt:
 
 - Riving av eksisterende fliser og kledning
 
@@ -271,7 +273,9 @@ INTRODUKSJONSTEKST
 
 
 
-1-2 setninger. Ikke mer.
+Kort intro. For NYE tilbud: nøyaktig to linjer (hilsen + takk-setning som under).
+
+For REVIDERTE tilbud: behold reviderte åpninger under — «Takk for henvendelsen —» er ikke påkrevd.
 
 FORMATKRAV:
 - Start ALLTID med "Hei [navn]!" på egen linje.
@@ -280,21 +284,25 @@ FORMATKRAV:
 
 
 
-For NYE tilbud — varierte åpninger:
+For NYE tilbud — fast struktur:
 
-- "Hei [navn]!\nTakk for henvendelsen —
+Linje 1: "Hei [navn]!"
 
-her er prisoverslaget på [jobb]."
+Linje 2: MÅ starte med nøyaktig: "Takk for henvendelsen —" (tankestrek/em dash,
 
-- "Hei [navn]!\nHer er prisoverslaget på [jobb]."
+mellomrom etter). Fullfør setningen kort og naturlig på samme linje, f.eks.:
 
-- "Hei [navn]!\nVi har sett på jobben
+- "Takk for henvendelsen — her er prisoverslaget på oppussing av bad."
 
-og sender over et prisoverslag."
+- "Takk for henvendelsen — her er tilbudet på gulvbytte og parkettlegging."
 
-- "Hei [navn]!\nTakk for at du tok kontakt.
 
-Her er tilbudet på [jobb]."
+
+ALDRI på NYE tilbud:
+
+- Hoppe over "Takk for henvendelsen —"
+
+- Starte linje 2 med bare "Her er prisoverslaget ..." eller lignende uten denne takk-åpningen
 
 
 
@@ -330,7 +338,7 @@ ALDRI:
 
 ═══════════════════════════════════════
 
-DETTE ER INKLUDERT
+DETTE ER AVTALT (ARBEIDSLISTE)
 
 ═══════════════════════════════════════
 
@@ -356,11 +364,13 @@ forutsetning, eller avklaringer som direkte påvirker utførelsen.
 
 IKKE utelat slike detaljer for å holde listen kort.
 
-Velg "Dette er inkludert:" når det er en del av leveransen/
+Overskriften før listen skal alltid være nøyaktig: "Dette er avtalt:"
 
-utførelsen, og "Viktig å merke seg:" når det hovedsakelig
+(kolon til slutt, egen linje, tom linje før første kulepunkt — som i malen over).
 
-handler om usikkerhet, risiko eller behov for avklaring —
+Sett konkret arbeid og utførelsesdetaljer som er del av leveransen under
+
+«Dette er avtalt:», og forbehold under «Viktig å merke seg:» —
 
 men dropp dem aldri helt hvis kunden har sagt det tydelig.
 
@@ -414,7 +424,7 @@ Koordinering mot elektriker og rørlegger må påregnes der det er nødvendig."
 
 
 
-Da kan "Dette er inkludert:" f.eks. være:
+Da kan listen under "Dette er avtalt:" f.eks. være:
 
 - Riving av eksisterende overflater
 
@@ -784,7 +794,7 @@ Hvis jobbeskrivelsen inneholder
 
 3. Integrer justering naturlig i
 
-"Dette er inkludert"-listen
+listen under "Dette er avtalt:"
 
 4. Ikke lag "Justering"-seksjon
 
@@ -808,7 +818,7 @@ tilbudet basert på tilbakemeldingen din."
 
 
 
-Dette er inkludert:
+Dette er avtalt:
 
 - Riving av eksisterende gulv
 
@@ -1189,7 +1199,7 @@ Aldri "Hei igjen".
 
 Behold original info, integrer justering
 
-naturlig i "Dette er inkludert"-listen.
+naturlig i listen under "Dette er avtalt:".
 
 Hvis kunden i justeringsteksten har oppgitt konkret dato eller arbeidssted eksplisitt, kan du bruke det — ikke gjett utover kundens ord.`
 
@@ -1205,7 +1215,7 @@ userMelding += `\n\nJUSTERING FRA KUNDE: ${input.justeringer}
 
 Kombiner original beskrivelse med justeringen.
 
-Oppdater "Dette er inkludert" og estimert tid.`
+Oppdater listen under "Dette er avtalt:" og estimert tid.`
 
 }
 
@@ -1221,7 +1231,7 @@ UTKAST-MODUS (ingen tekstanalyse av adresse/oppstart):
 
 - Mengder som "4 dører", "ca 8 meter" er aldri adresser.
 
-- I innledningen før "Dette er inkludert:": ikke nevn gateadresse eller sted hentet fra beskrivelsen.
+- I innledningen før "Dette er avtalt:": ikke nevn gateadresse eller sted hentet fra beskrivelsen.
 
 - Der oppstart skal beskrives i brødteksten uten strukturerte felt: bruk nøyaktig denne setningen:
 

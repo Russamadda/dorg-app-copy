@@ -18,10 +18,11 @@ import {
   UIManager,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
+import { erFirmaOppsettFullfort } from '../lib/firmaSetup'
 import { supabase, hentFirma, oppdaterFirma, lastOppLogo, loggUt } from '../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../lib/firmaCache'
 import { hentAutoPaminnelserEnabled, setAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
@@ -29,7 +30,7 @@ import { tjenesterForKategori } from '../constants/tjenester'
 import type { Firma } from '../types'
 import ToastMessage from '../components/ToastMessage'
 import Onboarding from '../components/Onboarding'
-import { getFloatingTabBarPadding } from '../components/FloatingTabBar'
+import { getStackScreenScrollBottomPadding } from '../components/FloatingTabBar'
 import AppBackground from '../components/AppBackground'
 import { BRAND_BACKGROUND_BASE_COLOR } from '../lib/backgroundConfig'
 
@@ -74,12 +75,8 @@ function normaliserAktiveTjenester(firma: Firma | null): string[] {
 
 export default function BedriftScreen() {
   const router = useRouter()
-  const { demoOnboarding } = useLocalSearchParams<{ demoOnboarding?: string | string[] }>()
   const insets = useSafeAreaInsets()
   const cachedFirma = getCachedFirma()
-  const visDemoOnboarding = Array.isArray(demoOnboarding)
-    ? demoOnboarding.includes('1') || demoOnboarding.includes('true')
-    : demoOnboarding === '1' || demoOnboarding === 'true'
 
   const [firma, setFirma] = useState<Firma | null>(cachedFirma)
   const [laster, setLaster] = useState(true)
@@ -92,13 +89,14 @@ export default function BedriftScreen() {
   })
 
   const [automatiskePaminnelser, setAutomatiskePaminnelser] = useState(false)
-  const [epostVarsler, setEpostVarsler] = useState(true)
   const [søkeTekst, setSøkeTekst] = useState('')
   const [søkeAktiv, setSøkeAktiv] = useState(false)
   const [redigerPrisModal, setRedigerPrisModal] = useState<'timepris' | 'paslag' | null>(null)
   const [prisInput, setPrisInput] = useState('')
+  const [hovedLogoLastFeilet, setHovedLogoLastFeilet] = useState(false)
 
   const scrollViewRef = useRef<ScrollView>(null)
+  const logoFeilToastForUrlRef = useRef<string | null>(null)
   const alleTjenester = firma?.tjenester ?? []
   const aktiveTjenester = normaliserAktiveTjenester(firma)
 
@@ -188,6 +186,11 @@ export default function BedriftScreen() {
   useEffect(() => {
     void setAutoPaminnelserEnabled(automatiskePaminnelser)
   }, [automatiskePaminnelser])
+
+  useEffect(() => {
+    setHovedLogoLastFeilet(false)
+    logoFeilToastForUrlRef.current = null
+  }, [firma?.logoUrl])
 
   function visToast(message: string, type: 'success' | 'error' = 'success') {
     setToast({ visible: true, message, type })
@@ -306,7 +309,7 @@ export default function BedriftScreen() {
 
   async function handleLoggUt() {
     await loggUt()
-    router.replace('/auth/login')
+    router.replace('/auth')
   }
 
   if (laster) {
@@ -317,18 +320,11 @@ export default function BedriftScreen() {
     )
   }
 
-  if (
-    visDemoOnboarding ||
-    !firma?.fagkategori ||
-    firma.fagkategori.trim() === '' ||
-    (firma.tjenester?.length ?? 0) === 0
-  ) {
+  if (!erFirmaOppsettFullfort(firma)) {
     return (
       <Onboarding
         userId={userId}
         firma={firma}
-        demoMode={visDemoOnboarding}
-        onAvbryt={visDemoOnboarding ? () => router.back() : undefined}
         onFerdig={oppdatert => {
           setFirmaOgCache(oppdatert)
         }}
@@ -336,7 +332,18 @@ export default function BedriftScreen() {
     )
   }
 
+  if (!firma) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator color="#111111" style={styles.loadingIndicator} size="large" />
+      </View>
+    )
+  }
+
   const initialer = hentInitialer(firma.firmanavn)
+  const logoUri = firma.logoUrl?.trim() ?? ''
+  const visHovedLogo =
+    Boolean(logoUri && /^https?:\/\//i.test(logoUri) && !hovedLogoLastFeilet)
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
@@ -345,6 +352,7 @@ export default function BedriftScreen() {
         message={toast.message}
         visible={toast.visible}
         type={toast.type}
+        layoutPreset="stack"
         onHide={() => setToast(t => ({ ...t, visible: false }))}
       />
 
@@ -390,13 +398,31 @@ export default function BedriftScreen() {
           styles.scrollContent,
           {
             paddingTop: insets.top + 62,
-            paddingBottom: getFloatingTabBarPadding(insets.bottom),
+            paddingBottom: getStackScreenScrollBottomPadding(insets.bottom),
           },
         ]}
       >
         <View style={styles.profileSection}>
           <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitials}>{initialer}</Text>
+            {visHovedLogo ? (
+              <Image
+                source={{ uri: logoUri }}
+                style={styles.avatarImage}
+                resizeMode="cover"
+                accessibilityLabel="Firmalogo"
+                onError={() => {
+                  console.warn('[bedrift] Logo visning feilet (hovedside):', firma.logoUrl)
+                  setHovedLogoLastFeilet(true)
+                  const u = firma.logoUrl ?? ''
+                  if (logoFeilToastForUrlRef.current !== u) {
+                    logoFeilToastForUrlRef.current = u
+                    visToast('Logo ble lagret, men kunne ikke vises ennå.', 'error')
+                  }
+                }}
+              />
+            ) : (
+              <Text style={styles.avatarInitials}>{initialer}</Text>
+            )}
           </View>
           <Text style={styles.companyName}>{firma.firmanavn}</Text>
           <Text style={styles.companyMeta}>
@@ -577,29 +603,10 @@ export default function BedriftScreen() {
             value={automatiskePaminnelser}
             onValueChange={setAutomatiskePaminnelser}
           />
-          <View style={styles.settingDivider} />
-          <SettingRow
-            title="E-postvarsler"
-            subtitle="Ved nye forespørsler"
-            value={epostVarsler}
-            onValueChange={setEpostVarsler}
-          />
-          <View style={styles.settingDivider} />
-          <View style={styles.settingRow}>
-            <View style={styles.settingText}>
-              <Text style={styles.settingTitle}>Standard gyldighet</Text>
-              <Text style={styles.settingSubtitle}>14 dager</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#888888" />
-          </View>
         </View>
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleLoggUt} activeOpacity={0.84}>
           <Text style={styles.logoutText}>Logg ut</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.deleteAccountButton} activeOpacity={0.84}>
-          <Text style={styles.deleteAccountText}>Slett konto</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -608,6 +615,7 @@ export default function BedriftScreen() {
         onClose={() => setVisModal(false)}
         firma={firma}
         userId={userId}
+        onBrukerMerknad={visToast}
         onLagret={oppdatert => {
           setFirmaOgCache(oppdatert)
           setVisModal(false)
@@ -651,12 +659,14 @@ function RedigerModal({
   firma,
   userId,
   onLagret,
+  onBrukerMerknad,
 }: {
   visible: boolean
   onClose: () => void
   firma: Firma | null
   userId: string
   onLagret: (f: Firma) => void
+  onBrukerMerknad?: (message: string, type: 'success' | 'error') => void
 }) {
   const [firmanavn, setFirmanavn] = useState(firma?.firmanavn ?? '')
   const [orgNummer, setOrgNummer] = useState(firma?.orgNummer ?? '')
@@ -666,6 +676,7 @@ function RedigerModal({
   const [poststed, setPoststed] = useState(firma?.poststed ?? '')
   const [logoUrl, setLogoUrl] = useState(firma?.logoUrl ?? '')
   const [lagrer, setLagrer] = useState(false)
+  const logoForhandsvisningFeiletForUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (visible && firma) {
@@ -679,6 +690,10 @@ function RedigerModal({
     }
   }, [visible, firma])
 
+  useEffect(() => {
+    logoForhandsvisningFeiletForUrlRef.current = null
+  }, [logoUrl])
+
   async function velgLogo() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: 'images',
@@ -691,7 +706,8 @@ function RedigerModal({
         const url = await lastOppLogo(result.assets[0].uri, userId)
         setLogoUrl(url)
       } catch (e) {
-        console.error(e)
+        console.error('[bedrift] Logo-opplasting feilet:', e)
+        onBrukerMerknad?.('Kunne ikke laste opp logo. Prøv igjen.', 'error')
       }
     }
   }
@@ -750,7 +766,21 @@ function RedigerModal({
           <ScrollView contentContainerStyle={modalStyles.content} showsVerticalScrollIndicator={false}>
             <TouchableOpacity style={modalStyles.logoBox} onPress={velgLogo} activeOpacity={0.86}>
               {logoUrl ? (
-                <Image source={{ uri: logoUrl }} style={modalStyles.logoImage} />
+                <Image
+                  source={{ uri: logoUrl }}
+                  style={modalStyles.logoImage}
+                  resizeMode="cover"
+                  onError={() => {
+                    console.warn('[bedrift] Logo forhåndsvisning feilet (modal):', logoUrl)
+                    if (logoForhandsvisningFeiletForUrlRef.current !== logoUrl) {
+                      logoForhandsvisningFeiletForUrlRef.current = logoUrl
+                      onBrukerMerknad?.(
+                        'Logo ble lagret, men kunne ikke vises ennå.',
+                        'error'
+                      )
+                    }
+                  }}
+                />
               ) : (
                 <>
                   <Ionicons name="add-outline" size={28} color="#888888" />
@@ -907,6 +937,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#DDDFE4',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
   },
   avatarInitials: {
     fontFamily: 'DMSans_700Bold',
@@ -1127,11 +1163,6 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_400Regular',
     color: '#888888',
   },
-  settingDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#F0F0F0',
-    marginHorizontal: 16,
-  },
   logoutButton: {
     marginTop: 24,
     backgroundColor: '#FFFFFF',
@@ -1149,17 +1180,6 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_500Medium',
     fontSize: 15,
     color: '#111111',
-  },
-  deleteAccountButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-  },
-  deleteAccountText: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontFamily: 'DMSans_400Regular',
-    color: '#888888',
   },
 })
 

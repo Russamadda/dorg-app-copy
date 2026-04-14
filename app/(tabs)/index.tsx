@@ -15,7 +15,7 @@ import {
   UIManager,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
 import * as Haptics from 'expo-haptics'
@@ -87,6 +87,7 @@ async function giSwipeHaptikk() {
 }
 
 export default function ForespørslerScreen() {
+  const router = useRouter()
   const insets = useSafeAreaInsets()
   const [forespørsler, setForespørsler] = useState<Forespørsel[]>([])
   const [skjulteIds, setSkjulteIds] = useState<string[]>([])
@@ -194,6 +195,19 @@ export default function ForespørslerScreen() {
     [synligeRader]
   )
 
+  const gåTilTilbudMedId = useCallback(
+    (tilbudId: string) => {
+      router.push({
+        pathname: '/(tabs)/tilbud',
+        params: {
+          openTilbudId: tilbudId,
+          tilbudOpenNonce: String(Date.now()),
+        },
+      })
+    },
+    [router]
+  )
+
   const håndterSlettUtkast = useCallback(
     async (rad: Forespørsel) => {
       if (rad.status !== 'utkast') return
@@ -227,13 +241,12 @@ export default function ForespørslerScreen() {
       <View style={styles.rowFront}>
         <ForespørselKort
           forespørsel={item}
-          firma={firma}
-          onOppdater={lastData}
           onÅpneUtkast={tilbudFlyt.åpneMedUtkast}
+          onGåTilTilbud={gåTilTilbudMedId}
         />
       </View>
     ),
-    [firma, lastData, tilbudFlyt.åpneMedUtkast]
+    [gåTilTilbudMedId, tilbudFlyt.åpneMedUtkast]
   )
 
   const håndterRowDidOpen = useCallback(

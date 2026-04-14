@@ -24,4 +24,12 @@ export const Colors = {
   headingGreen: '#1B4332',
   inputBorder: '#D1D5DB',
   inputBorderFocus: '#1B4332',
+  /** Teller-badge (sjelden brukt) — nøytral. */
+  notificationBadge: '#5C534A',
+  notificationBadgeDot: '#7A6E63',
+  notificationBadgeBorder: '#F0EFE9',
+  notificationBadgeText: '#FFFFFF',
+  /** Oppmerksomhet-prikk (tilbud-filter, tab) — lys varm oransje, ikke grå. */
+  notificationAttentionDot: '#FB923C',
+  notificationAttentionBorder: '#FFEDD5',
 }

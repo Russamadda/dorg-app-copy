@@ -52,14 +52,6 @@ function TopBar({ absolute = true }: Props) {
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity
-          style={styles.demoButton}
-          onPress={() => router.push({ pathname: '/bedrift', params: { demoOnboarding: '1' } })}
-          accessibilityLabel="Åpne onboarding-demo"
-          activeOpacity={0.82}
-        >
-          <Ionicons name="play-outline" size={16} color="#181A20" />
-        </TouchableOpacity>
-        <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => router.push('/bedrift')}
           accessibilityLabel="Bedrift"

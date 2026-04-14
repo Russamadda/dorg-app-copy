@@ -16,9 +16,9 @@ Dato: 10.04.2026
 ---
 
 Hei Kari!
-Her er prisoverslaget på montering av nytt kjøkken i enebolig hos deg.
+Takk for henvendelsen — her er prisoverslaget på montering av nytt kjøkken i enebolig hos deg.
 
-Dette er inkludert:
+Dette er avtalt:
 
 - Demontering av eksisterende innredning og bortkjøring
 - Montering av skap og fronter, tilpasning av benkeplate

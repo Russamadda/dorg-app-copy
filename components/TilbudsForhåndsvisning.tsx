@@ -16,6 +16,7 @@ const SEKSJONSTITLER = [
   'Gyldighet:',
   'Pris:',
   'Dette er inkludert:',
+  'Dette er avtalt:',
   'Viktig å merke seg:',
 ]
 

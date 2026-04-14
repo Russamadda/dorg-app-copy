@@ -1,16 +1,26 @@
 import { useEffect, useRef } from 'react'
 import { Animated, Platform, StyleSheet, Text, View } from 'react-native'
 import { BlurView } from 'expo-blur'
-import { getFloatingToastBottomOffset } from './FloatingTabBar'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { getFloatingToastBottomOffset, getStackToastBottomOffset } from './FloatingTabBar'
+
+export type ToastLayoutPreset = 'floatingTabs' | 'stack'
 
 interface ToastProps {
   melding: string
   type: 'suksess' | 'feil'
   synlig: boolean
   onHide?: () => void
+  /** Tab screens: above floating bar. Stack screens (e.g. Bedrift): uses bottom safe inset. */
+  layoutPreset?: ToastLayoutPreset
 }
 
-export function Toast({ melding, type, synlig, onHide }: ToastProps) {
+export function Toast({ melding, type, synlig, onHide, layoutPreset = 'floatingTabs' }: ToastProps) {
+  const insets = useSafeAreaInsets()
+  const bottomOffset =
+    layoutPreset === 'stack'
+      ? getStackToastBottomOffset(insets.bottom)
+      : getFloatingToastBottomOffset()
   const opacity = useRef(new Animated.Value(0)).current
   const translateY = useRef(new Animated.Value(16)).current
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -91,7 +101,7 @@ export function Toast({ melding, type, synlig, onHide }: ToastProps) {
       pointerEvents="none"
       style={[
         styles.host,
-        { bottom: getFloatingToastBottomOffset() },
+        { bottom: bottomOffset },
         { opacity, transform: [{ translateY }] },
       ]}
     >

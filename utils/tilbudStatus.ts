@@ -2,8 +2,12 @@ import type { Forespørsel } from '../types'
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
-type TilbudStatusMeta = {
+/** Én felles modell: badge = nåværende fase, subline = relativ tid, farger til liste/kort. */
+export type TilbudStatusMeta = {
+  badge: string
+  /** Bakoverkompatibel med kode som forventet ett `label`-felt (samme som badge). */
   label: string
+  subline: string | null
   color: string
   dotColor: string
   dotCheckmark?: boolean
@@ -32,6 +36,23 @@ function formaterLangDato(dato: Date) {
   })
 }
 
+/** "i dag" | "i går" | "for N dager siden" */
+export function relativTidsdel(datoIso: string, now: Date): string {
+  const d = new Date(datoIso)
+  if (Number.isNaN(d.getTime())) return ''
+  const dager = Math.max(0, dagerMellom(d, now))
+  if (dager === 0) return 'i dag'
+  if (dager === 1) return 'i går'
+  return `for ${dager} dager siden`
+}
+
+function medPrefiks(prefiks: string, datoIso: string | undefined, now: Date): string | null {
+  if (!datoIso) return null
+  const del = relativTidsdel(datoIso, now)
+  if (!del) return null
+  return `${prefiks} ${del}`
+}
+
 function hentAktivSendtDato(tilbud: Forespørsel) {
   return (
     tilbud.sistSendtDato ??
@@ -56,66 +77,149 @@ function hentPaminnelser(tilbud: Forespørsel) {
   return Math.max(tilbud.antallPaminnelser ?? 0, fraStatus, fraDatoer)
 }
 
-export function getTilbudKortStatus(tilbud: Forespørsel, now = new Date()): TilbudStatusMeta {
+/** Minst ett nytt send etter første (versjon eller to ulike sendt-datoer). */
+export function erOppdatertTilbudSendt(tilbud: Forespørsel): boolean {
+  if ((tilbud.versjon ?? 1) > 1) return true
+  const f = tilbud.forsteSendtDato
+  const s = tilbud.sistSendtDato ?? tilbud.sendtDato
+  if (f && s && f !== s) return true
+  return false
+}
+
+function meta(
+  badge: string,
+  subline: string | null,
+  color: string,
+  dotColor: string,
+  dotCheckmark?: boolean
+): TilbudStatusMeta {
+  return { badge, label: badge, subline, color, dotColor, dotCheckmark }
+}
+
+/**
+ * Badge = kort nåværende fase (ingen relativ tid i badge).
+ * Subline = når noe sist inntraff (forutsigbart under badge / i kort).
+ */
+export function getTilbudStatusPresentasjon(tilbud: Forespørsel, now = new Date()): TilbudStatusMeta {
   if (tilbud.status === 'utkast') {
-    return { label: 'Utkast', color: '#AEB6C2', dotColor: '#4ADE80' }
+    return meta('Utkast', null, '#AEB6C2', '#4ADE80')
   }
 
   if (tilbud.status === 'avventer') {
-    return { label: 'Avventer', color: '#B8860B', dotColor: '#B8860B' }
+    return meta(
+      'Avventer',
+      medPrefiks('Mottatt', tilbud.opprettetDato, now),
+      '#B8860B',
+      '#B8860B'
+    )
   }
 
   if (tilbud.status === 'godkjent') {
-    return { label: 'Godkjent', color: '#2D7A4F', dotColor: '#2D7A4F', dotCheckmark: true }
+    return meta(
+      'Godkjent',
+      medPrefiks('Godkjent', tilbud.godkjentDato, now),
+      '#2D7A4F',
+      '#2D7A4F',
+      true
+    )
   }
 
   if (tilbud.status === 'utfort') {
-    return { label: 'Utført', color: '#2D7A4F', dotColor: '#2D7A4F', dotCheckmark: true }
+    const datoKilde = tilbud.sistOppdatertDato ?? tilbud.godkjentDato
+    return meta(
+      'Utført',
+      datoKilde ? medPrefiks('Utført', datoKilde, now) : null,
+      '#2D7A4F',
+      '#2D7A4F',
+      true
+    )
   }
 
   if (tilbud.status === 'avslatt') {
-    return { label: 'Avslått', color: '#888888', dotColor: '#888888' }
+    return meta(
+      'Avslått',
+      medPrefiks('Avslått', tilbud.avslattDato, now),
+      '#888888',
+      '#888888'
+    )
   }
 
   if (tilbud.status === 'justering') {
-    return { label: 'Kunden ønsker justering', color: '#4B7BFF', dotColor: '#4B7BFF' }
+    return meta(
+      'Justering mottatt',
+      medPrefiks('Justering mottatt', tilbud.justeringOnsketDato, now),
+      '#4B7BFF',
+      '#4B7BFF'
+    )
   }
 
   const paminnelser = hentPaminnelser(tilbud)
   if (paminnelser >= 2 || tilbud.status === 'siste_paminnelse_sendt') {
-    return { label: 'Siste påminnelse sendt', color: '#C46A1A', dotColor: '#C46A1A' }
+    const d =
+      tilbud.sistePaminnelseSendtDato ??
+      tilbud.sistePaminnelseDato ??
+      tilbud.forstePaminnelseSendtDato ??
+      tilbud.forstePaminnelseDato
+    return meta(
+      'Siste påminnelse sendt',
+      d ? medPrefiks('Siste påminnelse sendt', d, now) : null,
+      '#C46A1A',
+      '#C46A1A'
+    )
   }
 
   if (paminnelser >= 1 || tilbud.status === 'paminnelse_sendt') {
-    return { label: 'Påminnelse sendt', color: '#D2A13B', dotColor: '#D2A13B' }
+    const d = tilbud.forstePaminnelseSendtDato ?? tilbud.forstePaminnelseDato
+    return meta(
+      'Påminnelse sendt',
+      d ? medPrefiks('Påminnelse sendt', d, now) : null,
+      '#D2A13B',
+      '#D2A13B'
+    )
   }
 
-  const dagerSidenSendt = Math.max(0, dagerMellom(new Date(hentAktivSendtDato(tilbud)), now))
+  const sendtDato = hentAktivSendtDato(tilbud)
+  const dagerSidenSendt = Math.max(0, dagerMellom(new Date(sendtDato), now))
 
+  const oppdatert = erOppdatertTilbudSendt(tilbud)
+  const sistSendtForSubline = tilbud.sistSendtDato ?? tilbud.sendtDato ?? sendtDato
+
+  if (oppdatert) {
+    const m = meta(
+      'Oppdatert tilbud sendt',
+      medPrefiks('Oppdatert tilbud sendt', sistSendtForSubline, now),
+      '#AEB6C2',
+      '#48C774'
+    )
+    if (dagerSidenSendt > 7) {
+      return { ...m, color: '#E04040', dotColor: '#E04040' }
+    }
+    return m
+  }
+
+  const m = meta(
+    'Sendt',
+    medPrefiks('Sendt', sendtDato, now),
+    '#AEB6C2',
+    '#48C774'
+  )
   if (dagerSidenSendt > 7) {
-    return { label: 'Kontakt kunde', color: '#E04040', dotColor: '#E04040' }
+    return { ...m, color: '#E04040', dotColor: '#E04040' }
   }
+  return m
+}
 
-  if (dagerSidenSendt === 0) {
-    return { label: 'Sendt i dag', color: '#AEB6C2', dotColor: '#48C774' }
-  }
-
-  if (dagerSidenSendt === 1) {
-    return { label: 'Sendt i går', color: '#AEB6C2', dotColor: '#48C774' }
-  }
-
-  return {
-    label: `Sendt for ${dagerSidenSendt} dager siden`,
-    color: '#AEB6C2',
-    dotColor: '#48C774',
-  }
+/** @alias getTilbudStatusPresentasjon */
+export function getTilbudKortStatus(tilbud: Forespørsel, now = new Date()): TilbudStatusMeta {
+  return getTilbudStatusPresentasjon(tilbud, now)
 }
 
 export function getTilbudHistorikk(tilbud: Forespørsel): TilbudHistorikkRad[] {
+  const p = getTilbudStatusPresentasjon(tilbud)
   const historikk: TilbudHistorikkRad[] = [
     {
       label: 'Status',
-      verdi: getTilbudKortStatus(tilbud).label,
+      verdi: p.subline ? `${p.badge} · ${p.subline}` : p.badge,
     },
   ]
 
@@ -153,7 +257,7 @@ export function getTilbudHistorikk(tilbud: Forespørsel): TilbudHistorikkRad[] {
 
   if (tilbud.sistSendtDato && tilbud.forsteSendtDato && tilbud.sistSendtDato !== tilbud.forsteSendtDato) {
     historikk.push({
-      label: 'Nytt tilbud sendt',
+      label: 'Oppdatert tilbud sendt',
       verdi: formaterLangDato(new Date(tilbud.sistSendtDato)),
     })
   }

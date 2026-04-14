@@ -16,6 +16,7 @@ import {
   InteractionManager,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { genererTilbud } from '../lib/openai'
@@ -37,7 +38,7 @@ import { hentAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
 import { getCachedTilbudHendelser, setCachedTilbudHendelser } from '../lib/tilbudHendelserCache'
 import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import type { Forespørsel, Firma, TilbudHendelse, TilbudHendelseType } from '../types'
-import { getTilbudKortStatus } from '../utils/tilbudStatus'
+import { getTilbudStatusPresentasjon } from '../utils/tilbudStatus'
 import { OFFER_FLOW_DEMO_DETALJER_PREVIEW_SCROLL_MS } from '../lib/demoRecording/offerFlowDemoConfig'
 import { sleep, smoothScrollY } from '../lib/demoRecording/offerFlowDemoPrimitives'
 
@@ -69,6 +70,7 @@ type TimelineEvent = {
 
 type StatusPresentation = {
   currentStatus: string
+  currentStatusSubline: string | null
   currentStatusColor: string
   timelineEvents: TimelineEvent[]
 }
@@ -86,13 +88,13 @@ interface Props {
 
 const HENDELSE_META: Record<TilbudHendelseType, { title: string; dotColor: string }> = {
   tilbud_sendt: { title: 'Tilbud sendt', dotColor: '#48C774' },
-  nytt_tilbud_sendt: { title: 'Nytt tilbud sendt', dotColor: '#48C774' },
-  justering_forespurt: { title: 'Kunde ber om justering', dotColor: '#4B7BFF' },
+  nytt_tilbud_sendt: { title: 'Oppdatert tilbud sendt', dotColor: '#48C774' },
+  justering_forespurt: { title: 'Kunde ba om justering', dotColor: '#4B7BFF' },
   paminnelse_sendt: { title: 'Påminnelse sendt', dotColor: '#D7872F' },
   siste_paminnelse_sendt: { title: 'Siste påminnelse sendt', dotColor: '#E45858' },
-  godkjent: { title: 'Godkjent', dotColor: '#48C774' },
-  utfort: { title: 'Utført', dotColor: '#48C774' },
-  avslatt: { title: 'Avslått', dotColor: '#AEB6C2' },
+  godkjent: { title: 'Tilbud godkjent', dotColor: '#48C774' },
+  utfort: { title: 'Arbeid markert som utført', dotColor: '#48C774' },
+  avslatt: { title: 'Tilbud avslått', dotColor: '#AEB6C2' },
 }
 
 function formaterAbsoluttDato(datoString?: string) {
@@ -170,20 +172,8 @@ function hentLegacyAvslutningsDato(tilbud: Forespørsel) {
 }
 
 function hentStatusMeta(tilbud: Forespørsel) {
-  const meta = getTilbudKortStatus(tilbud)
-  return { label: meta.label, color: meta.dotColor }
-}
-
-function hentHeaderStatus(tilbud: Forespørsel): { label: string; color: string } {
-  if (tilbud.status === 'justering') {
-    return { label: 'Justering', color: '#6FA4FF' }
-  }
-
-  if (tilbud.status === 'godkjent' || tilbud.status === 'utfort') {
-    return { label: 'Godkjent', color: '#72C791' }
-  }
-
-  return { label: 'Sendt', color: '#F5F7FA' }
+  const p = getTilbudStatusPresentasjon(tilbud)
+  return { badge: p.badge, subline: p.subline, color: p.dotColor }
 }
 
 function hentTekstFraMetadata(
@@ -292,7 +282,13 @@ function finnInsertIndexForSnapshotJustering(
 }
 
 function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
-  const hendelser: Array<{ key: string; title: string; date?: string; dotColor: string }> = []
+  const hendelser: Array<{
+    key: string
+    title: string
+    date?: string
+    dotColor: string
+    description?: string
+  }> = []
 
   const opprinneligSendtDato = hentLegacyForsteSendtDato(tilbud)
   if (opprinneligSendtDato) {
@@ -329,9 +325,10 @@ function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
   if (tilbud.status === 'justering' || tilbud.kundeJustering) {
     hendelser.push({
       key: 'justering',
-      title: 'Kunde ber om justering',
+      title: 'Kunde ba om justering',
       date: hentLegacyJusteringDato(tilbud),
       dotColor: '#4B7BFF',
+      description: tilbud.kundeJustering?.trim() || undefined,
     })
   }
 
@@ -339,7 +336,7 @@ function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
   if (nyttTilbudSendtDato && nyttTilbudSendtDato !== opprinneligSendtDato) {
     hendelser.push({
       key: 'nytt-tilbud-sendt',
-      title: 'Nytt tilbud sendt',
+      title: 'Oppdatert tilbud sendt',
       date: nyttTilbudSendtDato,
       dotColor: '#48C774',
     })
@@ -348,7 +345,7 @@ function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
   if (tilbud.status === 'godkjent') {
     hendelser.push({
       key: 'godkjent',
-      title: 'Godkjent',
+      title: 'Tilbud godkjent',
       date: tilbud.godkjentDato ?? hentLegacyAvslutningsDato(tilbud),
       dotColor: '#48C774',
     })
@@ -357,7 +354,7 @@ function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
   if (tilbud.status === 'avslatt') {
     hendelser.push({
       key: 'avslatt',
-      title: 'Avslått',
+      title: 'Tilbud avslått',
       date: tilbud.avslattDato ?? hentLegacyAvslutningsDato(tilbud),
       dotColor: '#AEB6C2',
     })
@@ -368,20 +365,29 @@ function byggLegacyTidslinje(tilbud: Forespørsel): TimelineEvent[] {
     title: hendelse.title,
     dateLabel: formaterAbsoluttDato(hendelse.date),
     dotColor: hendelse.dotColor,
+    description: hendelse.description,
   }))
 }
 
-function byggEventTidslinje(tilbud: Forespørsel, hendelser: TilbudHendelse[]): TimelineEvent[] {
+function byggEventTidslinje(hendelser: TilbudHendelse[]): TimelineEvent[] {
   return hendelser.map(hendelse => {
     const meta = HENDELSE_META[hendelse.hendelseType]
+    const justeringTekst =
+      hendelse.hendelseType === 'justering_forespurt'
+        ? hentTekstFraMetadata(hendelse.metadata, [...KUNDE_JUSTERING_METADATA_NØKLER]) ??
+          hendelse.beskrivelse?.trim() ??
+          undefined
+        : undefined
 
     return {
       key: hendelse.id,
-      title: hendelse.tittel || meta.title,
+      title: meta.title,
       dateLabel: formaterAbsoluttDato(hendelse.opprettetDato),
       dotColor: meta.dotColor,
-      // Ikke vis kundens melding i tidslinjen (vises i egen boble i UI).
-      description: hendelse.hendelseType === 'justering_forespurt' ? undefined : hendelse.beskrivelse ?? undefined,
+      description:
+        hendelse.hendelseType === 'justering_forespurt'
+          ? justeringTekst
+          : hendelse.beskrivelse ?? undefined,
     }
   })
 }
@@ -397,7 +403,7 @@ function byggStatusPresentasjon(
   if (hendelser.length === 0) {
     timelineEvents = byggLegacyTidslinje(tilbud)
   } else {
-    timelineEvents = byggEventTidslinje(tilbud, hendelser)
+    timelineEvents = byggEventTidslinje(hendelser)
 
     // Supplement: inject justering from snapshot when no event was logged.
     // This happens when the customer requested adjustment before tilbud_hendelser
@@ -410,10 +416,10 @@ function byggStatusPresentasjon(
       const justeringDato = hentLegacyJusteringDato(tilbud)
       const snapshotEntry: TimelineEvent = {
         key: 'snapshot-justering',
-        title: 'Kunde ber om justering',
+        title: 'Kunde ba om justering',
         dateLabel: formaterAbsoluttDato(justeringDato),
         dotColor: '#4B7BFF',
-        description: undefined,
+        description: tilbud.kundeJustering?.trim() || undefined,
       }
       // When historical justering events are missing, anchor the synthetic row to the
       // resend cycle for the current versjon instead of the first resend in the list.
@@ -441,7 +447,7 @@ function byggStatusPresentasjon(
         ...timelineEvents,
         {
           key: 'snapshot-godkjent',
-          title: 'Godkjent',
+          title: 'Tilbud godkjent',
           dateLabel: formaterAbsoluttDato(tilbud.godkjentDato ?? hentLegacyAvslutningsDato(tilbud)),
           dotColor: '#48C774',
         },
@@ -454,7 +460,7 @@ function byggStatusPresentasjon(
         ...timelineEvents,
         {
           key: 'snapshot-avslatt',
-          title: 'Avslått',
+          title: 'Tilbud avslått',
           dateLabel: formaterAbsoluttDato(tilbud.avslattDato ?? hentLegacyAvslutningsDato(tilbud)),
           dotColor: '#AEB6C2',
         },
@@ -463,7 +469,8 @@ function byggStatusPresentasjon(
   }
 
   return {
-    currentStatus: statusMeta.label,
+    currentStatus: statusMeta.badge,
+    currentStatusSubline: statusMeta.subline,
     currentStatusColor: statusMeta.color,
     timelineEvents,
   }
@@ -515,11 +522,17 @@ export default function TilbudDetaljerModal({
   opptaksDemoScrollPreview = false,
   onOpptaksDemoScrollPreviewFerdig,
 }: Props) {
+  const router = useRouter()
   const detaljerScrollRef = useRef<ScrollView>(null)
   const detaljerScrollMetricsRef = useRef({ contentH: 0, layoutH: 0 })
+  const tilKundenSeksjonY = useRef(0)
   const bekreftAnimasjon = useRef(new Animated.Value(0)).current
   const totalPopScale = useRef(new Animated.Value(1)).current
   const forrigeTotalInklRef = useRef<number | null>(null)
+  const inlineBekreftOpacity = useRef(new Animated.Value(0)).current
+  const inlineBekreftTranslate = useRef(new Animated.Value(6)).current
+  const tilKundenPuls = useRef(new Animated.Value(1)).current
+  const forrigeViserOppdatertRef = useRef(false)
   const [firma, setFirma] = useState<Firma | null>(null)
   const [hendelser, setHendelser] = useState<TilbudHendelse[] | null>(null)
   const [timerTekst, setTimerTekst] = useState(String(tilbud?.timer ?? 8))
@@ -527,7 +540,6 @@ export default function TilbudDetaljerModal({
   const [bekreftet, setBekreftet] = useState(false)
   const [viserOppdatertPris, setViserOppdatertPris] = useState(false)
   const [oppdatertTekst, setOppdatertTekst] = useState('')
-  const [oppdatererPris, setOppdatererPris] = useState(false)
   const [sender, setSender] = useState(false)
   const [justeringFase, setJusteringFase] = useState<'klar' | 'genererer' | 'klar_til_sending'>('klar')
   const [senderPaminnelse, setSenderPaminnelse] = useState(false)
@@ -592,15 +604,18 @@ export default function TilbudDetaljerModal({
       setBekreftet(false)
       setViserOppdatertPris(false)
       setOppdatertTekst('')
-      setOppdatererPris(false)
       setSender(false)
       setSenderPaminnelse(false)
       setHendelser(getCachedTilbudHendelser(tilbud.id) ?? null)
       setJusteringFase('klar')
       bekreftAnimasjon.setValue(0)
       forrigeTotalInklRef.current = null
+      forrigeViserOppdatertRef.current = false
+      inlineBekreftOpacity.setValue(0)
+      inlineBekreftTranslate.setValue(6)
+      tilKundenPuls.setValue(1)
     }
-  }, [tilbud?.id, bekreftAnimasjon])
+  }, [tilbud?.id, bekreftAnimasjon, inlineBekreftOpacity, inlineBekreftTranslate, tilKundenPuls])
 
   const harPrisEndring = useMemo(() => {
     if (!tilbud) return false
@@ -700,6 +715,47 @@ export default function TilbudDetaljerModal({
     onOpptaksDemoScrollPreviewFerdig,
   ])
 
+  useEffect(() => {
+    if (!viserOppdatertPris) {
+      inlineBekreftOpacity.setValue(0)
+      inlineBekreftTranslate.setValue(6)
+      return
+    }
+    Animated.parallel([
+      Animated.timing(inlineBekreftOpacity, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }),
+      Animated.timing(inlineBekreftTranslate, {
+        toValue: 0,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [viserOppdatertPris, inlineBekreftOpacity, inlineBekreftTranslate])
+
+  useEffect(() => {
+    const bleOppdatert = viserOppdatertPris && !forrigeViserOppdatertRef.current
+    forrigeViserOppdatertRef.current = viserOppdatertPris
+    if (!bleOppdatert || !tilbud?.generertTekst) return
+    tilKundenPuls.setValue(1)
+    Animated.sequence([
+      Animated.timing(tilKundenPuls, {
+        toValue: 1.045,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.timing(tilKundenPuls, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [viserOppdatertPris, tilbud?.generertTekst, tilbud?.id, tilKundenPuls])
+
   if (!tilbud) return null
 
   const aktivtTilbud = tilbud
@@ -713,12 +769,12 @@ export default function TilbudDetaljerModal({
   const presentasjon =
     hendelser === null
       ? {
-          currentStatus: statusMeta.label,
+          currentStatus: statusMeta.badge,
+          currentStatusSubline: statusMeta.subline,
           currentStatusColor: statusMeta.color,
           timelineEvents: byggLegacyTidslinje(aktivtTilbud),
         }
       : byggStatusPresentasjon(aktivtTilbud, hendelserForVisning)
-  const headerStatus = hentHeaderStatus(aktivtTilbud)
   const visPrisjusteringKort = !erGodkjentTilbud && !erUtfortTilbud && !erAvslattTilbud
   const originalTimer = aktivtTilbud.timer ?? 8
   const originalMaterialkostnad = aktivtTilbud.materialkostnad ?? 0
@@ -1019,25 +1075,14 @@ export default function TilbudDetaljerModal({
     }
   }
 
-  async function bekreftPrisendring() {
-    if (!harPrisEndring || oppdatererPris) return
-
-    setOppdatererPris(true)
-
-    try {
-      await oppdaterTilbudSnapshotUtenHendelse(aktivtTilbud.id, {
-        pris_eks_mva: sumEksMva,
-        timer,
-        materialkostnad,
-      })
-
-      setBekreftet(true)
-      setViserOppdatertPris(true)
-    } catch (error) {
-      console.error('Feil ved prisoppdatering:', error)
-    } finally {
-      setOppdatererPris(false)
-    }
+  /**
+   * Oppdaterer kun lokalt (forhåndsvisning + «Send tilbud»). Lagring til DB skjer i sendOppdatertTilbud,
+   * ellers ville timer/material i DB skille seg fra total i generertTekst — tilbudskortet leser total fra teksten først.
+   */
+  function bekreftPrisendring() {
+    if (!harPrisEndring) return
+    setBekreftet(true)
+    setViserOppdatertPris(true)
   }
 
   return (
@@ -1050,8 +1095,9 @@ export default function TilbudDetaljerModal({
     >
       <SafeAreaView style={styles.container} edges={['top']}>
         <OfferStatusHeader
-          currentStatus={headerStatus.label}
-          currentStatusColor={headerStatus.color}
+          currentStatus={presentasjon.currentStatus}
+          statusSubline={presentasjon.currentStatusSubline}
+          currentStatusColor={presentasjon.currentStatusColor}
           onClose={onClose}
         />
 
@@ -1121,13 +1167,22 @@ export default function TilbudDetaljerModal({
                   <Text style={styles.prisInlineSeksjonTittel}>Oppdater grunnlag</Text>
                   <Text style={styles.firmaPrisHint}>
                     Timepris og materialpåslag følger{' '}
-                    <Text style={styles.firmaPrisHintAccent}>firmainnstillingene</Text>.
+                    <Text
+                      style={styles.firmaPrisHintLenke}
+                      onPress={() => {
+                        onClose()
+                        router.push('/bedrift')
+                      }}
+                    >
+                      firmainnstillingene
+                    </Text>
+                    .
                   </Text>
-                  <View style={styles.prisInlineInputRow}>
-                    <View style={styles.prisInlineInputCellTimer}>
-                      <Text style={styles.prisInlineLabel}>Timer</Text>
+                  <View style={styles.prisGrunnlagFeltBlokk}>
+                    <View style={styles.prisGrunnlagRedigerbarRad}>
+                      <Text style={styles.metadataDetaljLabel}>Timer</Text>
                       <TextInput
-                        style={[styles.prisInlineInput, styles.prisInlineInputTimer]}
+                        style={styles.prisGrunnlagInputTimer}
                         value={timerTekst}
                         onChangeText={v => {
                           setTimerTekst(v)
@@ -1139,10 +1194,10 @@ export default function TilbudDetaljerModal({
                         {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
                       />
                     </View>
-                    <View style={styles.prisInlineInputCellMaterial}>
-                      <Text style={styles.prisInlineLabel}>Material (kr)</Text>
+                    <View style={styles.prisGrunnlagRedigerbarRad}>
+                      <Text style={styles.metadataDetaljLabel}>Material (kr)</Text>
                       <TextInput
-                        style={styles.prisInlineInput}
+                        style={styles.prisGrunnlagInputMaterial}
                         value={materialTekst}
                         onChangeText={v => {
                           setMaterialTekst(v)
@@ -1230,9 +1285,9 @@ export default function TilbudDetaljerModal({
                             void sendOppdatertTilbud()
                             return
                           }
-                          void bekreftPrisendring()
+                          bekreftPrisendring()
                         }}
-                        disabled={(!kanBekrefte && !bekreftet) || sender || oppdatererPris}
+                        disabled={(!kanBekrefte && !bekreftet) || sender}
                         activeOpacity={0.92}
                       >
                         {bekreftet ? (
@@ -1251,35 +1306,21 @@ export default function TilbudDetaljerModal({
                               <Text style={styles.primaryCtaTekst}>Send tilbud</Text>
                             </View>
                           </LinearGradient>
-                        ) : oppdatererPris ? (
+                        ) : (
                           <View
                             style={[
-                              styles.primaryCtaGradient,
-                              styles.primaryCtaInner,
-                              styles.primaryCtaMuted,
-                              styles.prisInlineCtaGradient,
+                              styles.prisOutlineCta,
+                              !kanBekrefte && styles.prisOutlineCtaDisabled,
                             ]}
                           >
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                            <Text style={styles.primaryCtaTekstMuted}>Oppdaterer...</Text>
-                          </View>
-                        ) : (
-                          <LinearGradient
-                            colors={
-                              kanBekrefte
-                                ? ['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']
-                                : ['rgba(55,60,68,0.95)', 'rgba(35,38,44,0.98)']
-                            }
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                            style={[styles.primaryCtaGradient, styles.primaryCtaInner, styles.prisInlineCtaGradient]}
-                          >
                             <Text
-                              style={kanBekrefte ? styles.primaryCtaTekst : styles.primaryCtaTekstMuted}
+                              style={
+                                kanBekrefte ? styles.prisOutlineCtaTekst : styles.prisOutlineCtaTekstDisabled
+                              }
                             >
                               Oppdater pris
                             </Text>
-                          </LinearGradient>
+                          </View>
                         )}
                       </TouchableOpacity>
                     )}
@@ -1291,11 +1332,43 @@ export default function TilbudDetaljerModal({
                       }}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       style={styles.prisInlineResetKnapp}
-                      disabled={oppdatererPris}
                     >
                       <Ionicons name="refresh" size={18} color="#9CA3AF" />
                     </TouchableOpacity>
                   </View>
+                  {viserOppdatertPris ? (
+                    <Animated.View
+                      style={{
+                        opacity: inlineBekreftOpacity,
+                        transform: [{ translateY: inlineBekreftTranslate }],
+                      }}
+                    >
+                      <Text style={styles.prisInlineBekreftTekst}>
+                          {aktivtTilbud.generertTekst
+                            ? [
+                                erJusteringsTilbud
+                                  ? 'Pris og tilbudstekst oppdatert, '
+                                  : 'Pris oppdatert, ',
+                                <Text
+                                  key="forhandsvisning"
+                                  style={styles.prisInlineForhandsvisningLenke}
+                                  onPress={() =>
+                                    detaljerScrollRef.current?.scrollTo({
+                                      y: Math.max(0, tilKundenSeksjonY.current - 12),
+                                      animated: true,
+                                    })
+                                  }
+                                >
+                                  se forhåndsvisning
+                                </Text>,
+                                '.',
+                              ]
+                            : erJusteringsTilbud
+                              ? 'Pris og tilbudstekst oppdatert.'
+                              : 'Pris oppdatert.'}
+                      </Text>
+                    </Animated.View>
+                  ) : null}
                   {erJusteringsTilbud ? (
                     <TouchableOpacity
                       onPress={avvisJustering}
@@ -1344,7 +1417,17 @@ export default function TilbudDetaljerModal({
 
           {aktivtTilbud.generertTekst ? (
             <>
-              <Text style={styles.dokumentSeksjonLabel}>Til kunden</Text>
+              <View
+                onLayout={e => {
+                  tilKundenSeksjonY.current = e.nativeEvent.layout.y
+                }}
+              >
+                <Animated.Text
+                  style={[styles.dokumentSeksjonLabel, { transform: [{ scale: tilKundenPuls }] }]}
+                >
+                  Til kunden
+                </Animated.Text>
+              </View>
               <OfferBodySection>
                 <TilbudsForhåndsvisning
                   tekst={visningsTekst}
@@ -1549,10 +1632,12 @@ function OfferTimelinePanel({
 
 function OfferStatusHeader({
   currentStatus,
+  statusSubline,
   currentStatusColor,
   onClose,
 }: {
   currentStatus: string
+  statusSubline?: string | null
   currentStatusColor: string
   onClose: () => void
 }) {
@@ -1564,6 +1649,11 @@ function OfferStatusHeader({
         <Text style={[styles.headerTitle, { color: currentStatusColor }]}>
           {currentStatus}
         </Text>
+        {statusSubline ? (
+          <Text style={styles.headerSubline} numberOfLines={2}>
+            {statusSubline}
+          </Text>
+        ) : null}
       </View>
 
       <TouchableOpacity
@@ -1664,9 +1754,7 @@ function OfferTimeline({ events }: { events: TimelineEvent[] }) {
                 ) : null}
               </View>
               {event.description ? (
-                <Text style={styles.timelineDescription} numberOfLines={2}>
-                  {event.description}
-                </Text>
+                <Text style={styles.timelineDescription}>{event.description}</Text>
               ) : null}
             </View>
           </View>
@@ -1712,13 +1800,21 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    minHeight: 44,
     paddingHorizontal: 12,
   },
   headerTitle: {
     fontSize: 22,
     lineHeight: 26,
     fontFamily: 'DMSans_700Bold',
+    textAlign: 'center',
+  },
+  headerSubline: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: 'rgba(255,255,255,0.55)',
     textAlign: 'center',
   },
   lukkKnapp: {
@@ -2364,75 +2460,122 @@ const styles = StyleSheet.create({
     letterSpacing: 0.55,
     color: 'rgba(255,255,255,0.88)',
     textTransform: 'uppercase',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   firmaPrisHint: {
     fontFamily: 'DMSans_400Regular',
     fontSize: 11,
     lineHeight: 15,
     color: 'rgba(255,255,255,0.42)',
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  firmaPrisHintAccent: {
+  firmaPrisHintLenke: {
     color: 'rgba(0, 255, 150, 0.78)',
+    textDecorationLine: 'underline',
   },
-  prisInlineInputRow: {
+  prisGrunnlagFeltBlokk: {
+    marginBottom: 8,
+  },
+  prisGrunnlagRedigerbarRad: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 7,
+    gap: 12,
   },
-  /** Timer trenger sjelden mer enn noen få tegn — smal kolonne. */
-  prisInlineInputCellTimer: {
-    flexGrow: 0,
+  prisGrunnlagInputTimer: {
+    height: 36,
+    width: 58,
+    minWidth: 58,
+    maxWidth: 64,
     flexShrink: 0,
-    width: 100,
-  },
-  /** Bredde ~halvparten av raden (ikke full rest etter timer). */
-  prisInlineInputCellMaterial: {
-    width: '50%',
-    flexGrow: 0,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  prisInlineLabel: {
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.45)',
-    marginBottom: 5,
-    letterSpacing: 0.3,
-  },
-  prisInlineInput: {
-    height: 40,
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(0,255,150,0.12)',
     fontFamily: 'DMSans_400Regular',
-    fontSize: 15,
-    color: '#FFFFFF',
+    fontSize: 13,
+    color: '#D1D6DE',
+    textAlign: 'right',
   },
-  prisInlineInputTimer: {
-    paddingHorizontal: 10,
+  prisGrunnlagInputMaterial: {
+    width: 104,
+    minWidth: 96,
+    maxWidth: 120,
+    flexShrink: 0,
+    height: 36,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,150,0.12)',
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: '#D1D6DE',
+    textAlign: 'right',
   },
   prisInlineActionRad: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginTop: 2,
   },
   prisInlineCtaTouch: {
     flex: 1,
     minWidth: 0,
   },
   prisInlineCtaGradient: {
-    height: 44,
-    borderRadius: 12,
+    height: 38,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+  },
+  prisInlineCtaSynlig: {
+    borderRadius: 10,
+  },
+  prisOutlineCta: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 10,
     paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,150,0.38)',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  prisOutlineCtaDisabled: {
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  prisOutlineCtaTekst: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 14,
+    letterSpacing: 0.2,
+    color: 'rgba(200,245,220,0.95)',
+  },
+  prisOutlineCtaTekstDisabled: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 14,
+    letterSpacing: 0.2,
+    color: 'rgba(255,255,255,0.32)',
+  },
+  prisInlineBekreftTekst: {
+    marginTop: 10,
+    paddingRight: 4,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    lineHeight: 17,
+    color: 'rgba(0,255,150,0.82)',
+  },
+  prisInlineForhandsvisningLenke: {
+    color: 'rgba(0, 255, 150, 0.78)',
+    textDecorationLine: 'underline',
   },
   prisInlineResetKnapp: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
     justifyContent: 'center',

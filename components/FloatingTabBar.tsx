@@ -20,12 +20,31 @@ const FAB_RING = 8
 const FAB_TOTAL_SIZE = FAB_SIZE + FAB_RING
 const FAB_LIFT = 18
 
+/** Space above the floating tab bar + FAB (toast sits here on tab screens). */
+const TOAST_OFFSET_ABOVE_FLOATING_UI = 76 + FAB_LIFT + 10
+
+/** Extra clearance above home indicator for toasts on stack/modal screens (no tab bar). */
+const STACK_TOAST_CLEARANCE_PT = 16
+
+/** Scroll content breathing room below safe area when there is no floating tab bar. */
+const STACK_SCROLL_EXTRA_BELOW_SAFE_PT = 32
+
 export function getFloatingTabBarPadding(bottomInset: number): number {
-  return Math.max(bottomInset, 8) + 76 + FAB_LIFT + 10
+  return Math.max(bottomInset, 8) + TOAST_OFFSET_ABOVE_FLOATING_UI
 }
 
 export function getFloatingToastBottomOffset(): number {
-  return 76 + FAB_LIFT + 10
+  return TOAST_OFFSET_ABOVE_FLOATING_UI
+}
+
+/** Toast bottom offset for screens without the floating tab bar (e.g. Bedrift stack). */
+export function getStackToastBottomOffset(bottomInset: number): number {
+  return Math.max(bottomInset, 8) + STACK_TOAST_CLEARANCE_PT
+}
+
+/** ScrollView `paddingBottom` for stack screens without the floating tab bar. */
+export function getStackScreenScrollBottomPadding(bottomInset: number): number {
+  return Math.max(bottomInset, 12) + STACK_SCROLL_EXTRA_BELOW_SAFE_PT
 }
 
 type SideTabProps = {
@@ -56,7 +75,7 @@ const SideTab = memo(function SideTab({
           size={24}
           color={active ? ACTIVE_COLOR : INACTIVE_COLOR}
         />
-        {badgeVisible ? <NotificationBadge visible /> : null}
+        {badgeVisible ? <NotificationBadge visible variant="attention" /> : null}
       </View>
       <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
         {label}
