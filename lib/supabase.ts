@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type Session } from '@supabase/supabase-js'
+import { clearCachedFirma } from './firmaCache'
 import type {
   Forespørsel,
   Firma,
@@ -25,6 +26,36 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 })
+
+function erUgyldigRefreshTokenFeil(melding?: string | null): boolean {
+  const normalisert = melding?.toLowerCase() ?? ''
+  return (
+    normalisert.includes('invalid refresh token') ||
+    normalisert.includes('refresh token not found') ||
+    normalisert.includes('refresh_token_not_found')
+  )
+}
+
+export async function tømLokalAuthSession(): Promise<void> {
+  clearCachedFirma()
+  await supabase.auth.signOut({ scope: 'local' })
+}
+
+/**
+ * Hent persistert session (inkl. stille refresh når access token er utløpt).
+ * Ved ugyldig eller slettet refresh token: tømmer lokalt lager og returnerer null.
+ */
+export async function hentLokalAuthSession(): Promise<Session | null> {
+  const { data: { session }, error } = await supabase.auth.getSession()
+  if (error) {
+    if (erUgyldigRefreshTokenFeil(error.message)) {
+      console.info('[auth] Ugyldig lokal refresh token. Tømmer lokal session.')
+    }
+    await tømLokalAuthSession()
+    return null
+  }
+  return session ?? null
+}
 
 type SupabaseFeilLike = {
   code?: string | null
@@ -916,6 +947,18 @@ export async function opprettFirma(userId: string, firmanavn: string): Promise<v
   if (error) throw new Error(error.message)
 }
 
+export async function sikreFirmaForBruker(
+  userId: string,
+  firmanavn = 'Min bedrift'
+): Promise<void> {
+  const eksisterende = await hentFirma(userId)
+  if (eksisterende) {
+    return
+  }
+
+  await opprettFirma(userId, firmanavn)
+}
+
 export async function hentPrishistorikk(firmaId: string): Promise<Prishistorikk[]> {
   const { data, error } = await supabase
     .from('prishistorikk')
@@ -932,7 +975,20 @@ export async function lastOppLogo(
   userId: string
 ): Promise<string> {
   const response = await fetch(uri)
-  const blob = await response.blob()
+  let bytes: ArrayBuffer
+  if (typeof response.arrayBuffer === 'function') {
+    bytes = await response.arrayBuffer()
+  } else {
+    const blob = await response.blob()
+    if (typeof blob.arrayBuffer !== 'function') {
+      throw new Error('Kunne ikke lese bildefilen. Prøv et annet bildeformat.')
+    }
+    bytes = await blob.arrayBuffer()
+  }
+
+  if (bytes.byteLength === 0) {
+    throw new Error('Logo-filen var tom (0 bytes). Velg et annet bilde og prøv igjen.')
+  }
 
   const filExt = uri.split('.').pop()?.toLowerCase().split('?')[0] ?? 'jpg'
   const filNavn = `logo-${userId}-${Date.now()}.${filExt}`
@@ -940,7 +996,7 @@ export async function lastOppLogo(
 
   const { error: uploadError } = await supabase.storage
     .from('logoer')
-    .upload(filNavn, blob, { contentType, upsert: true })
+    .upload(filNavn, bytes, { contentType, upsert: true })
 
   if (uploadError) {
     console.error('[supabase] logo upload error:', uploadError)
@@ -962,5 +1018,9 @@ export async function lastOppLogo(
 }
 
 export async function loggUt(): Promise<void> {
-  await supabase.auth.signOut()
+  clearCachedFirma()
+  const { error } = await supabase.auth.signOut()
+  if (error) {
+    await tømLokalAuthSession()
+  }
 }

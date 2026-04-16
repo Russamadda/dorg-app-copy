@@ -24,6 +24,7 @@ import {
   supabase,
   hentForespørsler,
   hentFirma,
+  hentLokalAuthSession,
   hentUtkast,
   slettTilbud,
 } from '../../lib/supabase'
@@ -35,6 +36,7 @@ import ForespørselKort from '../../components/ForespørselKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
 import ToastMessage from '../../components/ToastMessage'
 import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
+import { Colors } from '../../constants/colors'
 
 type FilterKey = 'alle' | 'avventer' | 'utkast'
 
@@ -107,7 +109,7 @@ export default function ForespørslerScreen() {
 
   const lastData = useCallback(async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession()
+      const session = await hentLokalAuthSession()
       if (!session) return
       const firmaData = await hentFirma(session.user.id)
       setFirma(firmaData)
@@ -515,7 +517,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   filterPillActive: {
-    backgroundColor: '#111111',
+    backgroundColor: Colors.primary,
   },
   filterPillInactive: {
     backgroundColor: '#FFFFFF',

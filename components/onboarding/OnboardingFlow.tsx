@@ -1,37 +1,33 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  View,
-  Text,
+  Keyboard,
+  Pressable,
   StyleSheet,
-  TouchableOpacity,
+  Text,
   TextInput,
-  Animated,
-  Easing,
-  Platform,
-  ActivityIndicator,
+  View,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter } from 'expo-router'
-import OnboardingShell from './OnboardingShell'
-import { deriveOnboardingStep } from './deriveOnboardingStep'
+import Animated, {
+  KeyboardState,
+  ReduceMotion,
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+  withTiming,
+} from 'react-native-reanimated'
+import AuthPrimaryButton from '../auth/AuthPrimaryButton'
+import AuthTextField from '../auth/AuthTextField'
+import { authOnboardingColors } from '../../constants/authOnboardingTheme'
+import { tjenesterForKategori } from '../../constants/tjenester'
 import { notifyFirmaOppsettEndret } from '../../lib/firmaSetupEvents'
+import { FAGKATEGORIER } from '../../lib/fagkategorier'
 import { hentFirma, oppdaterFirma, opprettFirma } from '../../lib/supabase'
-import { tabBarEmitter } from '../../lib/tabBarEmitter'
-import { FAGKATEGORIER, TJENESTER_PER_KATEGORI } from '../../lib/fagkategorier'
-import { authOnboardingColors, authOnboardingTheme } from '../../constants/authOnboardingTheme'
 import type { Firma } from '../../types'
+import { deriveOnboardingStep } from './deriveOnboardingStep'
+import OnboardingShell from './OnboardingShell'
+import OnboardingStepStage from './OnboardingStepStage'
 
-const PLACEHOLDER_FIRMANAVN = 'Min bedrift'
-
-const KATEGORI_IKON: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
-  snekker: 'hammer-outline',
-  maler: 'color-palette-outline',
-  elektriker: 'flash-outline',
-  rorlegger: 'water-outline',
-  entreprenor: 'business-outline',
-}
-
-type Step = 1 | 2 | 3 | 4 | 5
+type Step = 1 | 2 | 3 | 4
 
 type Props = {
   userId: string
@@ -39,684 +35,976 @@ type Props = {
   onFerdig: (oppdatertFirma: Firma) => void
 }
 
-function ProgressDots({ step, total }: { step: Step; total: number }) {
-  return (
-    <View style={styles.dotsRow}>
-      {Array.from({ length: total }, (_, i) => {
-        const n = i + 1
-        const active = n === step
-        const done = n < step
-        return (
-          <View
-            key={n}
-            style={[styles.dot, active && styles.dotActive, done && styles.dotDone]}
-          />
-        )
-      })}
-    </View>
-  )
-}
+const PLACEHOLDER_FIRMANAVN = 'Min bedrift'
+const MAX_ACTIVE_TJENESTER = 6
 
 export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
-  const router = useRouter()
+  const keyboard = useAnimatedKeyboard()
+  const hasFirmaRef = useRef(Boolean(firma?.id))
+  const initSignaturRef = useRef<string | null>(null)
+  const stepCommitFrameRef = useRef<number | null>(null)
+
   const [step, setStep] = useState<Step>(1)
-  const [initialized, setInitialized] = useState(false)
-  const slide = useRef(new Animated.Value(0)).current
+  const [direction, setDirection] = useState<1 | -1>(1)
 
   const [firmanavn, setFirmanavn] = useState('')
-  const [valgtKategori, setValgtKategori] = useState<string | null>(null)
-  const [valgteTjenester, setValgteTjenester] = useState<string[]>([])
-  const [timeprisStr, setTimeprisStr] = useState('')
-  const [materialStr, setMaterialStr] = useState('')
+  const [fagkategori, setFagkategori] = useState<string | null>(null)
+  const [tjenester, setTjenester] = useState<string[]>([])
+  const [timepris, setTimepris] = useState('')
+  const [materialPaslag, setMaterialPaslag] = useState('')
+
+  const [feil, setFeil] = useState<string | null>(null)
   const [lagrer, setLagrer] = useState(false)
-  const [feil, setFeil] = useState('')
-
-  const timeprisInputRef = useRef<TextInput>(null)
 
   useEffect(() => {
-    tabBarEmitter.setVisible(false)
-    return () => {
-      tabBarEmitter.setVisible(true)
+    const initSignatur = `${userId}:${firma?.id ?? 'none'}:${firma?.userId ?? 'none'}`
+    if (initSignaturRef.current === initSignatur) {
+      return
     }
-  }, [])
 
-  useEffect(() => {
-    if (!firma || initialized) return
-    const s = deriveOnboardingStep(firma)
-    setStep(s)
-    const navn = firma.firmanavn?.trim() ?? ''
-    setFirmanavn(navn === PLACEHOLDER_FIRMANAVN ? '' : navn)
-    setValgtKategori(firma.fagkategori ?? null)
-    setValgteTjenester(firma.tjenester ?? [])
-    setTimeprisStr(firma.timepris != null && firma.timepris > 0 ? String(firma.timepris) : '')
-    setMaterialStr(firma.materialPaslag != null ? String(firma.materialPaslag) : '')
-    setInitialized(true)
-  }, [firma, initialized])
+    if (stepCommitFrameRef.current != null) {
+      cancelAnimationFrame(stepCommitFrameRef.current)
+      stepCommitFrameRef.current = null
+    }
 
-  useEffect(() => {
-    if (step !== 4) return
-    const t = setTimeout(() => timeprisInputRef.current?.focus(), 260)
-    return () => clearTimeout(t)
-  }, [step])
+    const nesteSteg = deriveOnboardingStep(firma)
+    setStep(nesteSteg)
+    setDirection(1)
+    hasFirmaRef.current = Boolean(firma?.id)
 
-  function animateStep(neste: Step) {
-    Animated.timing(slide, {
-      toValue: -10,
-      duration: 120,
-      easing: Easing.in(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
-      setStep(neste)
-      slide.setValue(14)
-      Animated.timing(slide, {
-        toValue: 0,
-        duration: 200,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start()
+    const navn = firma?.firmanavn?.trim() ?? ''
+    setFirmanavn(navn && navn !== PLACEHOLDER_FIRMANAVN ? navn : '')
+    setFagkategori(firma?.fagkategori ?? null)
+    setTjenester(firma?.tjenester ?? [])
+    setTimepris(firma?.timepris != null && firma.timepris > 0 ? String(firma.timepris) : '')
+    setMaterialPaslag(firma?.materialPaslag != null ? String(firma.materialPaslag) : '')
+    setFeil(null)
+    setLagrer(false)
+
+    initSignaturRef.current = initSignatur
+  }, [firma, userId])
+
+  const tilgjengeligeTjenester = useMemo(
+    () => tjenesterForKategori(fagkategori).slice(0, 6),
+    [fagkategori]
+  )
+  const valgtKategoriInfo = useMemo(
+    () => FAGKATEGORIER.find(kategori => kategori.id === fagkategori) ?? null,
+    [fagkategori]
+  )
+
+  const flowKeyboardAnimatedStyle = useAnimatedStyle(() => {
+    const keyboardVisible =
+      keyboard.state.value === KeyboardState.OPEN ||
+      keyboard.state.value === KeyboardState.OPENING
+
+    const lift = keyboardVisible && step === 3 ? -84 : 0
+
+    return {
+      transform: [
+        {
+          translateY: withTiming(lift, {
+            duration: 170,
+            reduceMotion: ReduceMotion.System,
+          }),
+        },
+      ],
+    }
+  }, [keyboard.state, step])
+
+  async function ensureFirmaExists(navn: string) {
+    if (hasFirmaRef.current) {
+      return
+    }
+
+    await opprettFirma(userId, navn || PLACEHOLDER_FIRMANAVN)
+    hasFirmaRef.current = true
+  }
+
+  function gåTilSteg(nesteSteg: Step) {
+    if (nesteSteg === step) {
+      return
+    }
+    const nesteRetning: 1 | -1 = nesteSteg > step ? 1 : -1
+    setDirection(nesteRetning)
+    setFeil(null)
+
+    // Viktig: la direction committe på nåværende steg først, slik at exiting-retning blir korrekt.
+    if (stepCommitFrameRef.current != null) {
+      cancelAnimationFrame(stepCommitFrameRef.current)
+    }
+    stepCommitFrameRef.current = requestAnimationFrame(() => {
+      setStep(nesteSteg)
+      stepCommitFrameRef.current = null
     })
   }
 
-  async function nesteFraSteg1() {
+  useEffect(() => {
+    return () => {
+      if (stepCommitFrameRef.current != null) {
+        cancelAnimationFrame(stepCommitFrameRef.current)
+      }
+    }
+  }, [])
+
+  async function lagreSteg1() {
     const navn = firmanavn.trim()
     if (!navn) {
       setFeil('Skriv inn firmanavn.')
       return
     }
-    setFeil('')
-    setLagrer(true)
-    try {
-      if (!firma?.id) {
-        await opprettFirma(userId, navn)
-      } else {
-        await oppdaterFirma(userId, { firmanavn: navn })
-      }
-      animateStep(2)
-    } catch (e) {
-      console.error(e)
-      setFeil('Kunne ikke lagre. Prøv igjen.')
-    } finally {
-      setLagrer(false)
-    }
-  }
-
-  async function nesteFraSteg2() {
-    if (!valgtKategori?.trim()) {
-      setFeil('Velg en fagkategori.')
+    if (!fagkategori) {
+      setFeil('Velg fagkategori.')
       return
     }
-    setFeil('')
+
+    setFeil(null)
     setLagrer(true)
+
     try {
-      await oppdaterFirma(userId, { fagkategori: valgtKategori })
-      animateStep(3)
-    } catch (e) {
-      console.error(e)
-      setFeil('Kunne ikke lagre. Prøv igjen.')
+      await ensureFirmaExists(navn)
+      await oppdaterFirma(userId, {
+        firmanavn: navn,
+        fagkategori,
+      })
+      gåTilSteg(2)
+    } catch (error) {
+      console.error('[onboarding] steg 1 feilet:', error)
+      setFeil('Kunne ikke lagre firmaopplysningene. Prøv igjen.')
     } finally {
       setLagrer(false)
     }
   }
 
-  async function nesteFraSteg3() {
-    if (valgteTjenester.length < 1) {
+  async function lagreSteg2() {
+    if (tjenester.length < 1) {
       setFeil('Velg minst én tjeneste.')
       return
     }
-    setFeil('')
+
+    setFeil(null)
     setLagrer(true)
+
     try {
+      await ensureFirmaExists(firmanavn.trim())
       await oppdaterFirma(userId, {
-        tjenester: valgteTjenester,
-        aktiveTjenester: valgteTjenester,
+        tjenester,
+        aktiveTjenester: tjenester.slice(0, MAX_ACTIVE_TJENESTER),
       })
-      animateStep(4)
-    } catch (e) {
-      console.error(e)
-      setFeil('Kunne ikke lagre. Prøv igjen.')
+      gåTilSteg(3)
+    } catch (error) {
+      console.error('[onboarding] steg 2 feilet:', error)
+      setFeil('Kunne ikke lagre tjenestene. Prøv igjen.')
     } finally {
       setLagrer(false)
     }
   }
 
-  function nesteFraSteg4() {
-    const tp = Number(timeprisStr.replace(/\s/g, '')) || 0
-    const mp = Number(materialStr.replace(/\s/g, ''))
-    if (tp <= 0) {
-      setFeil('Oppgi timepris (kr/t).')
-      return
+  function validerPriser(): { gyldig: boolean; tp: number; mp: number } {
+    const tp = Number(timepris.replace(/\s/g, '').replace(',', '.'))
+    const mp = Number(materialPaslag.replace(/\s/g, '').replace(',', '.'))
+
+    if (!Number.isFinite(tp) || tp <= 0) {
+      setFeil('Skriv inn en gyldig timepris.')
+      return { gyldig: false, tp: 0, mp: 0 }
     }
-    if (materialStr.trim() === '' || Number.isNaN(mp) || mp < 0) {
-      setFeil('Oppgi materialpåslag i prosent (0 er lov).')
-      return
+
+    if (!Number.isFinite(mp) || mp < 0 || mp > 500) {
+      setFeil('Skriv inn et gyldig materialpåslag.')
+      return { gyldig: false, tp, mp: 0 }
     }
-    setFeil('')
-    animateStep(5)
+
+    setFeil(null)
+    return { gyldig: true, tp: Math.round(tp), mp: Math.round(mp) }
   }
 
-  async function fullfor() {
-    const tp = Number(timeprisStr.replace(/\s/g, '')) || 0
-    const mp = Number(materialStr.replace(/\s/g, '')) || 0
+  function nesteFraSteg3() {
+    const { gyldig } = validerPriser()
+    if (!gyldig) {
+      return
+    }
+    Keyboard.dismiss()
+    gåTilSteg(4)
+  }
+
+  async function fullforOnboarding() {
     const navn = firmanavn.trim()
+    const { gyldig, tp, mp } = validerPriser()
+
+    if (!navn) {
+      setFeil('Skriv inn firmanavn.')
+      gåTilSteg(1)
+      return
+    }
+
+    if (!fagkategori) {
+      setFeil('Velg fagkategori.')
+      gåTilSteg(1)
+      return
+    }
+
+    if (tjenester.length < 1) {
+      setFeil('Velg minst én tjeneste.')
+      gåTilSteg(2)
+      return
+    }
+
+    if (!gyldig) {
+      gåTilSteg(3)
+      return
+    }
+
+    setFeil(null)
     setLagrer(true)
+
     try {
+      await ensureFirmaExists(navn)
       await oppdaterFirma(userId, {
         firmanavn: navn,
-        fagkategori: valgtKategori ?? '',
-        tjenester: valgteTjenester,
-        aktiveTjenester: valgteTjenester,
+        fagkategori,
+        tjenester,
+        aktiveTjenester: tjenester.slice(0, MAX_ACTIVE_TJENESTER),
         timepris: tp,
         materialPaslag: mp,
       })
-      const fersk = await hentFirma(userId)
-      if (!fersk) {
-        setLagrer(false)
-        return
+
+      const oppdatertFirma = await hentFirma(userId)
+      if (!oppdatertFirma) {
+        throw new Error('Mangler firma etter onboarding')
       }
+
       notifyFirmaOppsettEndret()
-      onFerdig(fersk)
-    } catch (e) {
-      console.error(e)
+      onFerdig(oppdatertFirma)
+    } catch (error) {
+      console.error('[onboarding] fullføring feilet:', error)
+      setFeil('Kunne ikke fullføre oppsettet. Prøv igjen.')
+    } finally {
       setLagrer(false)
-      return
     }
-    setLagrer(false)
-    router.replace('/(tabs)/tilbud')
   }
 
-  function goBack() {
-    setFeil('')
-    if (step === 1) return
-    animateStep((step - 1) as Step)
-  }
-
-  const kategoriInfo = FAGKATEGORIER.find(k => k.id === valgtKategori)
-  const tjenesteListe = TJENESTER_PER_KATEGORI[valgtKategori ?? ''] ?? []
-
-  function toggleTjeneste(t: string) {
-    setValgteTjenester(prev =>
-      prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]
+  function toggleTjeneste(tjeneste: string) {
+    setTjenester(current =>
+      current.includes(tjeneste)
+        ? current.filter(verdi => verdi !== tjeneste)
+        : [...current, tjeneste]
     )
   }
 
-  const header = (
-    <View style={styles.header}>
-      <TouchableOpacity
-        style={styles.backBtn}
-        onPress={goBack}
-        disabled={step === 1}
-        activeOpacity={0.75}
-      >
-        {step > 1 ? (
-          <Ionicons name="arrow-back-outline" size={22} color={authOnboardingColors.text} />
-        ) : (
-          <View style={{ width: 44 }} />
-        )}
-      </TouchableOpacity>
-      <ProgressDots step={step} total={5} />
-      <View style={{ width: 44 }} />
-    </View>
-  )
+  function renderStep(currentStep: Step) {
+    if (currentStep === 1) {
+      return (
+        <View style={styles.stepLayer}>
+          <Text style={[styles.cardTitle, styles.cardTitleAbove]}>Sett opp bedriften</Text>
+          <View style={styles.card}>
+          <Text style={[styles.cardLead, styles.cardLeadFirstInCard]}>
+            Legg inn firmanavn og velg fagkategori.
+          </Text>
 
-  return (
-    <OnboardingShell header={header} extraScrollHeight={step === 4 ? 160 : 100}>
-      <Animated.View style={{ flex: 1, opacity: 1, transform: [{ translateY: slide }] }}>
-        {step === 1 && (
-          <View style={styles.stepBlock}>
-            <Text style={styles.eyebrow}>Steg 1 av 5</Text>
-            <Text style={styles.title}>Hva heter firmaet ditt?</Text>
-            <Text style={styles.lead}>
-              Dette vises til kunder i tilbud og på profilen din. Du kan finpusse detaljer senere under
-              Bedrift.
-            </Text>
-            <Text style={authOnboardingTheme.fieldLabel}>Firmanavn</Text>
-            <TextInput
-              style={authOnboardingTheme.input}
-              value={firmanavn}
-              onChangeText={setFirmanavn}
-              placeholder="F.eks. Hansen Snekkerverksted AS"
-              placeholderTextColor="#A2A8B3"
-              autoCapitalize="words"
-            />
-            {feil ? <Text style={authOnboardingTheme.errorText}>{feil}</Text> : null}
-            <TouchableOpacity
-              style={[authOnboardingTheme.cta, (lagrer || !firmanavn.trim()) && authOnboardingTheme.ctaDisabled]}
-              onPress={() => void nesteFraSteg1()}
-              disabled={lagrer || !firmanavn.trim()}
-              activeOpacity={0.88}
-            >
-              {lagrer ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={authOnboardingTheme.ctaLabel}>Fortsett</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
+          <AuthTextField
+            label="Firmanavn"
+            value={firmanavn}
+            onChangeText={text => {
+              setFirmanavn(text)
+              if (feil) setFeil(null)
+            }}
+            placeholder="F.eks. Hansen Bygg AS"
+            autoCapitalize="words"
+          />
 
-        {step === 2 && (
-          <View style={styles.stepBlock}>
-            <Text style={styles.eyebrow}>Steg 2 av 5</Text>
-            <Text style={styles.title}>Hva jobber du med?</Text>
-            <Text style={styles.lead}>Velg én hovedkategori — du kan utvide senere.</Text>
-            <View style={styles.cardStack}>
-              {FAGKATEGORIER.map(k => {
-                const valgt = valgtKategori === k.id
-                const ikon = KATEGORI_IKON[k.id] ?? 'hammer-outline'
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionLabel}>Fagkategori</Text>
+            <View style={styles.optionList}>
+              {FAGKATEGORIER.map(kategori => {
+                const valgt = fagkategori === kategori.id
                 return (
-                  <TouchableOpacity
-                    key={k.id}
-                    style={[styles.katCard, valgt && styles.katCardActive]}
+                  <Pressable
+                    key={kategori.id}
+                    style={({ pressed }) => [
+                      styles.optionRow,
+                      valgt && styles.optionRowSelected,
+                      pressed && styles.optionRowPressed,
+                    ]}
                     onPress={() => {
-                      if (valgtKategori !== k.id) setValgteTjenester([])
-                      setValgtKategori(k.id)
+                      setFagkategori(kategori.id)
+                      setTjenester([])
+                      if (feil) setFeil(null)
                     }}
-                    activeOpacity={0.82}
                   >
-                    <View style={[styles.katIcon, valgt && styles.katIconActive]}>
-                      <Ionicons name={ikon} size={22} color={valgt ? '#fff' : authOnboardingColors.text} />
+                    <View style={styles.optionCopy}>
+                      <Text style={styles.optionTitle}>{kategori.navn}</Text>
+                      <Text style={styles.optionText}>{kategori.beskrivelse}</Text>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.katTitle}>{k.navn}</Text>
-                      <Text style={styles.katDesc}>{k.beskrivelse}</Text>
+                    <View style={[styles.optionCheck, valgt && styles.optionCheckSelected]}>
+                      <Ionicons
+                        name={valgt ? 'checkmark' : 'ellipse-outline'}
+                        size={18}
+                        color={valgt ? '#FFFFFF' : authOnboardingColors.textSubtle}
+                      />
                     </View>
-                    {valgt ? <Ionicons name="checkmark-circle" size={22} color={authOnboardingColors.cta} /> : null}
-                  </TouchableOpacity>
+                  </Pressable>
                 )
               })}
             </View>
-            {feil ? <Text style={authOnboardingTheme.errorText}>{feil}</Text> : null}
-            <TouchableOpacity
-              style={[authOnboardingTheme.cta, (lagrer || !valgtKategori) && authOnboardingTheme.ctaDisabled]}
-              onPress={() => void nesteFraSteg2()}
-              disabled={lagrer || !valgtKategori}
-              activeOpacity={0.88}
-            >
-              {lagrer ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={authOnboardingTheme.ctaLabel}>Fortsett</Text>
-              )}
-            </TouchableOpacity>
           </View>
-        )}
 
-        {step === 3 && (
-          <View style={styles.stepBlock}>
-            <Text style={styles.eyebrow}>Steg 3 av 5</Text>
-            <Text style={styles.title}>Velg tjenester</Text>
-            <Text style={styles.lead}>Marker det du tilbyr. Du kan legge til egne tjenester senere.</Text>
-            <View style={styles.cardStack}>
-              {tjenesteListe.map(t => {
-                const valgt = valgteTjenester.includes(t)
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.tjenesteRad, valgt && styles.tjenesteRadActive]}
-                    onPress={() => toggleTjeneste(t)}
-                    activeOpacity={0.82}
-                  >
-                    <Text style={[styles.tjenesteTxt, valgt && styles.tjenesteTxtActive]}>{t}</Text>
-                    <View style={[styles.chk, valgt && styles.chkActive]}>
-                      <Ionicons name={valgt ? 'checkmark' : 'add'} size={16} color={valgt ? '#fff' : '#7B818C'} />
-                    </View>
-                  </TouchableOpacity>
-                )
-              })}
+          {feil ? <Text style={styles.errorText}>{feil}</Text> : null}
+          <AuthPrimaryButton
+            label="Neste"
+            onPress={() => void lagreSteg1()}
+            loading={lagrer}
+            disabled={!firmanavn.trim() || !fagkategori}
+            style={styles.primaryButton}
+          />
+        </View>
+        </View>
+      )
+    }
+
+    if (currentStep === 2) {
+      return (
+        <View style={[styles.stepLayer, styles.stepLayerCentered]}>
+          <View style={[styles.cardStack, styles.stepTjenesterLift]}>
+            <Text style={[styles.cardTitle, styles.cardTitleAbove]}>Velg tjenester</Text>
+            <View style={styles.card}>
+          <Text style={[styles.cardLead, styles.cardLeadFirstInCard]}>
+            Du kan legge til flere tjenester på profilen din senere.
+          </Text>
+
+          <View style={styles.serviceList}>
+            {tilgjengeligeTjenester.map(tjeneste => {
+              const valgt = tjenester.includes(tjeneste)
+              return (
+                <Pressable
+                  key={tjeneste}
+                  style={({ pressed }) => [
+                    styles.serviceRow,
+                    valgt && styles.serviceRowSelected,
+                    pressed && styles.serviceRowPressed,
+                  ]}
+                  onPress={() => {
+                    toggleTjeneste(tjeneste)
+                    if (feil) setFeil(null)
+                  }}
+                >
+                  <View style={styles.serviceCopy}>
+                    <Text style={[styles.serviceTitle, valgt && styles.serviceTitleSelected]}>
+                      {tjeneste}
+                    </Text>
+                  </View>
+                  <View style={[styles.serviceCheck, valgt && styles.serviceCheckSelected]}>
+                    <Ionicons
+                      name={valgt ? 'checkmark' : 'ellipse-outline'}
+                      size={18}
+                      color={valgt ? '#FFFFFF' : authOnboardingColors.textSubtle}
+                    />
+                  </View>
+                </Pressable>
+              )
+            })}
+          </View>
+
+          {feil ? <Text style={styles.errorText}>{feil}</Text> : null}
+          <AuthPrimaryButton
+            label="Neste"
+            onPress={() => void lagreSteg2()}
+            loading={lagrer}
+            disabled={tjenester.length < 1}
+            style={styles.primaryButton}
+          />
             </View>
-            {feil ? <Text style={authOnboardingTheme.errorText}>{feil}</Text> : null}
-            <TouchableOpacity
-              style={[
-                authOnboardingTheme.cta,
-                (lagrer || valgteTjenester.length < 1) && authOnboardingTheme.ctaDisabled,
-              ]}
-              onPress={() => void nesteFraSteg3()}
-              disabled={lagrer || valgteTjenester.length < 1}
-              activeOpacity={0.88}
-            >
-              {lagrer ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={authOnboardingTheme.ctaLabel}>Fortsett</Text>
-              )}
-            </TouchableOpacity>
+            <Text style={[styles.stepQuoteText, styles.stepQuoteTextOutsideCard]}>
+              Dette gjør at DORG forstår hva bedriften din faktisk tilbyr,{'\n'}
+              slik at nye tilbud blir mer treffsikre fra start.
+            </Text>
           </View>
-        )}
+        </View>
+      )
+    }
 
-        {step === 4 && (
-          <View style={styles.stepBlock}>
-            <Text style={styles.eyebrow}>Steg 4 av 5</Text>
-            <Text style={styles.title}>Priser</Text>
-            <Text style={styles.lead}>Du kan endre dette når som helst under Bedrift.</Text>
+    if (currentStep === 3) {
+      return (
+        <View style={[styles.stepLayer, styles.stepLayerCentered]}>
+          <View style={[styles.cardStack, styles.stepPrisgrunnlagLift]}>
+            <Text style={[styles.cardTitle, styles.cardTitleAbove]}>Prisgrunnlag</Text>
+            <View style={styles.card}>
+          <Text style={[styles.cardLead, styles.cardLeadFirstInCard]}>
+            Dette kan justeres senere på profilsiden.
+          </Text>
 
-            <Text style={[authOnboardingTheme.fieldLabel, { marginTop: 8 }]}>Timepris</Text>
-            <View style={styles.priceRow}>
+          <View style={styles.priceField}>
+            <Text style={styles.sectionLabel}>Timepris</Text>
+            <View style={styles.priceInputRow}>
               <TextInput
-                ref={timeprisInputRef}
                 style={styles.priceInput}
-                value={timeprisStr}
-                onChangeText={txt => setTimeprisStr(txt.replace(/[^0-9]/g, ''))}
-                keyboardType="number-pad"
-                keyboardAppearance="light"
+                value={timepris}
+                onChangeText={text => {
+                  setTimepris(text.replace(/[^0-9,]/g, ''))
+                  if (feil) setFeil(null)
+                }}
+                keyboardType="decimal-pad"
                 placeholder="950"
-                placeholderTextColor="#A2A8B3"
+                placeholderTextColor="#8A94A5"
               />
               <Text style={styles.priceSuffix}>kr/t</Text>
             </View>
-            <Text style={styles.hint}>{kategoriInfo?.timeprisHint ?? ''}</Text>
+            <Text style={styles.helperText}>
+              Standard timepris for nye tilbud.
+            </Text>
+          </View>
 
-            <Text style={[authOnboardingTheme.fieldLabel, { marginTop: 22 }]}>Materialpåslag</Text>
-            <View style={styles.priceRow}>
+          <View style={styles.priceField}>
+            <Text style={styles.sectionLabel}>Materialpåslag</Text>
+            <View style={styles.priceInputRow}>
               <TextInput
                 style={styles.priceInput}
-                value={materialStr}
-                onChangeText={txt => setMaterialStr(txt.replace(/[^0-9]/g, ''))}
-                keyboardType="number-pad"
-                keyboardAppearance="light"
+                value={materialPaslag}
+                onChangeText={text => {
+                  setMaterialPaslag(text.replace(/[^0-9,]/g, ''))
+                  if (feil) setFeil(null)
+                }}
+                keyboardType="decimal-pad"
                 placeholder="15"
-                placeholderTextColor="#A2A8B3"
+                placeholderTextColor="#8A94A5"
               />
               <Text style={styles.priceSuffix}>%</Text>
             </View>
-            <Text style={styles.hint}>Påslag på materialer du kjøper inn (0 % er helt i orden).</Text>
-
-            {feil ? <Text style={[authOnboardingTheme.errorText, { marginTop: 12 }]}>{feil}</Text> : null}
-            <TouchableOpacity
-              style={[authOnboardingTheme.cta, { marginTop: 20 }]}
-              onPress={nesteFraSteg4}
-              activeOpacity={0.88}
-            >
-              <Text style={authOnboardingTheme.ctaLabel}>Fortsett</Text>
-            </TouchableOpacity>
+            <Text style={styles.helperText}>
+              Påslag for materialkostnader.
+            </Text>
           </View>
-        )}
 
-        {step === 5 && (
-          <View style={styles.stepBlock}>
-            <View style={styles.completeIcon}>
-              <Ionicons name="checkmark" size={32} color="#fff" />
+          {feil ? <Text style={styles.errorText}>{feil}</Text> : null}
+          <AuthPrimaryButton
+            label="Neste"
+            onPress={nesteFraSteg3}
+            disabled={!timepris.trim() || !materialPaslag.trim()}
+            style={styles.primaryButton}
+          />
             </View>
-            <Text style={styles.title}>Alt er klart</Text>
-            <Text style={styles.lead}>Dorg er klar til å lage tilbud for deg.</Text>
+            <Text style={[styles.stepQuoteText, styles.stepQuoteTextOutsideCard]}>
+              Disse verdiene brukes i beregningen av nye tilbud,{'\n'}
+              slik at du slipper å starte fra blankt hver gang.
+            </Text>
+          </View>
+        </View>
+      )
+    }
 
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryTop}>
-                <View>
-                  <Text style={styles.summaryKat}>{kategoriInfo?.navn ?? ''}</Text>
-                  <Text style={styles.summaryMeta}>
-                    {timeprisStr || '—'} kr/t · {materialStr || '—'} % påslag
-                  </Text>
-                </View>
-                <View style={styles.summaryIconBox}>
-                  <Ionicons
-                    name={KATEGORI_IKON[valgtKategori ?? ''] ?? 'construct-outline'}
-                    size={24}
-                    color={authOnboardingColors.text}
-                  />
-                </View>
-              </View>
-              <View style={styles.divider} />
-              {valgteTjenester.map(t => (
-                <View key={t} style={styles.svcRow}>
-                  <Text style={styles.svcTxt}>{t}</Text>
-                  <Ionicons name="checkmark-circle" size={18} color="#2B9A66" />
+    return (
+      <View style={[styles.stepLayer, styles.stepLayerCentered]}>
+        <View style={[styles.cardStack, styles.cardStackNarrow]}>
+          <View style={styles.completeHeroAbove}>
+            <View style={styles.completeIconLarge}>
+              <Ionicons name="checkmark" size={44} color="#FFFFFF" />
+            </View>
+            <Text style={[styles.cardTitle, styles.cardTitleAbove, styles.completeTitleAbove]}>
+              Alt er klart!
+            </Text>
+          </View>
+          <View style={[styles.card, styles.cardSummaryComplete]}>
+          <View style={styles.summaryHeader}>
+            <Text style={styles.summaryCompanyName}>{firmanavn}</Text>
+            <Text style={styles.summaryCategory}>{valgtKategoriInfo?.navn ?? '—'}</Text>
+          </View>
+
+          <View style={styles.summaryDivider} />
+
+          <View style={styles.summaryBlock}>
+            <Text style={styles.summarySectionTitle}>Tjenester</Text>
+            <View style={styles.summaryServiceList}>
+              {tjenester.map(tjeneste => (
+                <View key={tjeneste} style={styles.summaryServiceRow}>
+                  <Text style={styles.summaryServiceText}>{tjeneste}</Text>
+                  <Ionicons name="checkmark-circle" size={16} color={authOnboardingColors.cta} />
                 </View>
               ))}
             </View>
-
-            <TouchableOpacity
-              style={[authOnboardingTheme.cta, lagrer && authOnboardingTheme.ctaDisabled]}
-              onPress={() => void fullfor()}
-              disabled={lagrer}
-              activeOpacity={0.88}
-            >
-              {lagrer ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={authOnboardingTheme.ctaLabel}>Lag ditt første tilbud</Text>
-              )}
-            </TouchableOpacity>
           </View>
-        )}
-      </Animated.View>
+
+          <View style={styles.summaryDivider} />
+
+          <View style={styles.summaryPriceRow}>
+            <View style={styles.summaryPriceCell}>
+              <Text style={[styles.summarySectionTitle, styles.summaryPriceHeading]}>Timepris</Text>
+              <Text style={[styles.summaryPrimaryValue, styles.summaryPriceValue]}>
+                {timepris || '—'} kr/t
+              </Text>
+            </View>
+            <View style={styles.summaryPriceCell}>
+              <Text style={[styles.summarySectionTitle, styles.summaryPriceHeading]}>
+                Materialpåslag
+              </Text>
+              <Text style={[styles.summaryPrimaryValue, styles.summaryPriceValue]}>
+                {materialPaslag || '—'} %
+              </Text>
+            </View>
+          </View>
+
+          {feil ? <Text style={styles.errorText}>{feil}</Text> : null}
+          </View>
+
+          <AuthPrimaryButton
+            label="Fullfør profilen og lag ditt første tilbud"
+            onPress={() => void fullforOnboarding()}
+            loading={lagrer}
+            style={styles.completePrimaryButtonBelow}
+          />
+        </View>
+      </View>
+    )
+  }
+
+  return (
+    <OnboardingShell>
+      <View style={styles.flowColumn}>
+        <View style={styles.hero}>
+          <Pressable
+            onPress={() => gåTilSteg((Math.max(1, step - 1) as Step))}
+            disabled={step === 1 || lagrer}
+            accessibilityRole="button"
+            style={[styles.backButton, step === 1 && styles.backButtonDisabled]}
+          >
+            <Ionicons name="arrow-back" size={18} color={authOnboardingColors.text} />
+          </Pressable>
+          <Text style={styles.progressLabel}>Steg {step} av 4</Text>
+          <View style={styles.progressWrap}>
+            <View style={styles.progressDots}>
+              {[1, 2, 3, 4].map(verdi => {
+                const aktiv = verdi === step
+                const ferdig = verdi < step
+                return (
+                  <View
+                    key={verdi}
+                    style={[styles.progressDot, aktiv && styles.progressDotActive, ferdig && styles.progressDotDone]}
+                  />
+                )
+              })}
+            </View>
+          </View>
+        </View>
+
+        <Animated.View style={[styles.stageFill, flowKeyboardAnimatedStyle]}>
+          <OnboardingStepStage
+            step={step}
+            direction={direction}
+            renderStep={renderStep}
+          />
+        </Animated.View>
+      </View>
     </OnboardingShell>
   )
 }
 
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 12,
+  flowColumn: {
+    flex: 1,
+    minHeight: 0,
+    /** Samme som tidligere steg 1 — låser «Steg x av x» + progress på tvers av alle steg. */
+    paddingTop: 52,
+    paddingBottom: 6,
   },
-  backBtn: {
-    width: 44,
-    height: 44,
+  stageFill: {
+    flex: 1,
+    minHeight: 0,
+  },
+  stepLayer: {
+    flex: 1,
+    width: '100%',
+    minHeight: 0,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 20,
+  },
+  /** Vertikal sentrering av kort i steg 2–4 (tjenester, pris, oppsummering). */
+  stepLayerCentered: {
+    justifyContent: 'center',
+    paddingVertical: 6,
+  },
+  /** Løfter «Velg tjenester»-tittel + kort litt opp; for stor negativ verdi skjuler tittelen under hero. */
+  stepTjenesterLift: {
+    marginTop: -96,
+  },
+  /** Løfter «Prisgrunnlag»-tittel + kort mye opp på skjermen. */
+  stepPrisgrunnlagLift: {
+    marginTop: -176,
+  },
+  hero: {
+    position: 'relative',
+    marginBottom: 12,
+    alignItems: 'center',
+    minHeight: 68,
+    justifyContent: 'flex-start',
+  },
+  progressWrap: {
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 42,
   },
-  dotsRow: {
+  backButton: {
+    position: 'absolute',
+    left: 16,
+    top: -50,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,17,17,0.08)',
+  },
+  backButtonDisabled: {
+    opacity: 0,
+  },
+  progressDots: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  dot: {
+  progressDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: 'rgba(17,17,17,0.12)',
   },
-  dotActive: {
+  progressDotActive: {
     width: 22,
     backgroundColor: authOnboardingColors.cta,
   },
-  dotDone: {
-    backgroundColor: 'rgba(30,58,95,0.35)',
+  progressDotDone: {
+    backgroundColor: 'rgba(27,67,50,0.28)',
   },
-  stepBlock: {
-    paddingTop: 8,
-    maxWidth: 400,
-    alignSelf: 'center',
-    width: '100%',
-  },
-  eyebrow: {
+  progressLabel: {
     fontFamily: 'DMSans_500Medium',
-    fontSize: 11,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: authOnboardingColors.textSubtle,
-    marginBottom: 10,
-  },
-  title: {
-    fontFamily: 'DMSerifDisplay_400Regular',
-    fontSize: 30,
-    lineHeight: 36,
-    color: authOnboardingColors.text,
-    marginBottom: 10,
-  },
-  lead: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 15,
-    lineHeight: 22,
-    color: authOnboardingColors.textMuted,
-    marginBottom: 22,
-  },
-  cardStack: {
-    gap: 10,
-    marginBottom: 20,
-  },
-  katCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: authOnboardingColors.surface,
-    borderWidth: 1,
-    borderColor: authOnboardingColors.border,
-    gap: 12,
-  },
-  katCardActive: {
-    borderColor: authOnboardingColors.cta,
-    borderWidth: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.98)',
-  },
-  katIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: 'rgba(17,17,17,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  katIconActive: {
-    backgroundColor: authOnboardingColors.cta,
-  },
-  katTitle: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 16,
-    color: authOnboardingColors.text,
-  },
-  katDesc: {
-    fontFamily: 'DMSans_400Regular',
     fontSize: 13,
     color: authOnboardingColors.textMuted,
-    marginTop: 2,
+    marginBottom: 8,
   },
-  tjenesteRad: {
+  card: {
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(27,67,50,0.08)',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+  cardTitle: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 24,
+    lineHeight: 30,
+    color: authOnboardingColors.text,
+  },
+  /** Tittel over kortet, midtstilt på full bredde. */
+  cardTitleAbove: {
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    marginBottom: 12,
+  },
+  /** Kort + tittel stablet (full bredde). */
+  cardStack: {
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  /** Kun steg 4: bredere blokk ved å bruke litt av shell-padding (tydelig på små skjermer). */
+  cardStackNarrow: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
+  },
+  /** Første tekst i kort etter at tittel er flyttet ut. */
+  cardLeadFirstInCard: {
+    marginTop: 0,
+  },
+  cardLead: {
+    marginTop: 8,
+    marginBottom: 14,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 14,
+    lineHeight: 20,
+    color: authOnboardingColors.textMuted,
+    textAlign: 'center',
+    alignSelf: 'stretch',
+  },
+  sectionBlock: {
+    marginTop: 0,
+  },
+  sectionLabel: {
+    marginBottom: 8,
+    marginLeft: 8,
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    color: authOnboardingColors.text,
+  },
+  optionList: {
+    gap: 8,
+  },
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(132,145,161,0.2)',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  optionRowSelected: {
+    borderColor: authOnboardingColors.cta,
+    backgroundColor: 'rgba(27,67,50,0.05)',
+  },
+  optionRowPressed: {
+    opacity: 0.9,
+  },
+  optionCopy: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 14,
+    color: authOnboardingColors.text,
+  },
+  optionText: {
+    marginTop: 2,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    lineHeight: 16,
+    color: authOnboardingColors.textMuted,
+  },
+  optionCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(17,17,17,0.05)',
+  },
+  optionCheckSelected: {
+    backgroundColor: authOnboardingColors.cta,
+  },
+  serviceList: {
+    gap: 8,
+  },
+  serviceRow: {
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: authOnboardingColors.surface,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderWidth: 1,
-    borderColor: authOnboardingColors.border,
-    marginBottom: 8,
+    borderColor: 'rgba(132,145,161,0.2)',
   },
-  tjenesteRadActive: {
+  serviceRowSelected: {
     borderColor: authOnboardingColors.cta,
+    backgroundColor: 'rgba(27,67,50,0.05)',
   },
-  tjenesteTxt: {
+  serviceRowPressed: {
+    opacity: 0.9,
+  },
+  serviceCopy: {
     flex: 1,
-    fontFamily: 'DMSans_500Medium',
-    fontSize: 15,
-    color: authOnboardingColors.text,
     paddingRight: 12,
   },
-  tjenesteTxtActive: {
+  serviceTitle: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    lineHeight: 17,
+    color: authOnboardingColors.text,
+  },
+  serviceTitleSelected: {
     fontFamily: 'DMSans_700Bold',
   },
-  chk: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(17,17,17,0.05)',
+  serviceCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: authOnboardingColors.border,
+    backgroundColor: 'rgba(17,17,17,0.05)',
   },
-  chkActive: {
+  serviceCheckSelected: {
     backgroundColor: authOnboardingColors.cta,
-    borderColor: authOnboardingColors.cta,
   },
-  priceRow: {
+  priceField: {
+    marginBottom: 14,
+  },
+  priceInputRow: {
+    minHeight: 54,
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    borderBottomWidth: 2,
-    borderBottomColor: 'rgba(17,17,17,0.2)',
-    paddingBottom: 6,
-    minHeight: 56,
+    alignItems: 'center',
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(132,145,161,0.2)',
+    paddingHorizontal: 16,
   },
   priceInput: {
     flex: 1,
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 40,
-    lineHeight: 46,
-    color: authOnboardingColors.text,
-    paddingVertical: 4,
     minHeight: 52,
-    ...Platform.select({
-      android: { includeFontPadding: false },
-      default: {},
-    }),
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 17,
+    color: authOnboardingColors.text,
   },
   priceSuffix: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 18,
-    color: authOnboardingColors.textSubtle,
-    marginLeft: 8,
-    marginBottom: 8,
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 15,
+    color: authOnboardingColors.textMuted,
   },
-  hint: {
+  helperText: {
+    marginTop: 6,
+    marginLeft: 8,
     fontFamily: 'DMSans_400Regular',
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: 18,
     color: authOnboardingColors.textMuted,
-    marginTop: 10,
   },
-  completeIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    backgroundColor: authOnboardingColors.cta,
+  stepQuoteText: {
+    marginTop: 10,
+    marginBottom: 8,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    lineHeight: 18,
+    fontStyle: 'italic',
+    color: 'rgba(27,67,50,0.84)',
+    textAlign: 'center',
+    alignSelf: 'center',
+  },
+  stepQuoteTextOutsideCard: {
+    marginTop: 18,
+    marginBottom: 0,
+    maxWidth: 320,
+  },
+  completeHeroAbove: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginBottom: 14,
+    /** Løfter checkmark + «Alt er klart!» tydelig opp mot hero/progress. */
+    marginTop: -108,
+  },
+  completeIconLarge: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 20,
+    backgroundColor: authOnboardingColors.cta,
+    marginBottom: 10,
+  },
+  /** Justerer «Alt er klart!» når den bruker cardTitle + cardTitleAbove. */
+  completeTitleAbove: {
+    fontSize: 24,
+    lineHeight: 30,
+    marginBottom: 22,
   },
   summaryCard: {
     borderRadius: 20,
-    padding: 18,
-    backgroundColor: authOnboardingColors.surface,
+    backgroundColor: 'rgba(17,17,17,0.03)',
     borderWidth: 1,
-    borderColor: authOnboardingColors.border,
-    marginBottom: 22,
+    borderColor: 'rgba(17,17,17,0.05)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 14,
   },
-  summaryTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  /** Oppsummeringskort steg 4 — ekstra luft i kortet. */
+  cardSummaryComplete: {
+    paddingTop: 18,
+    paddingBottom: 18,
+    paddingHorizontal: 16,
+  },
+  summaryHeader: {
     alignItems: 'center',
+    gap: 6,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
-  summaryKat: {
+  summaryCompanyName: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 20,
+    lineHeight: 24,
+    color: authOnboardingColors.text,
+    textAlign: 'center',
+  },
+  summaryCategory: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 14,
+    lineHeight: 18,
+    color: authOnboardingColors.textMuted,
+    textAlign: 'center',
+  },
+  summaryBlock: {
+    gap: 8,
+  },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: 'rgba(17,17,17,0.08)',
+    marginVertical: 10,
+  },
+  summarySectionTitle: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    color: authOnboardingColors.textMuted,
+  },
+  summaryPrimaryValue: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 14,
+    lineHeight: 20,
     color: authOnboardingColors.text,
   },
-  summaryMeta: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    color: authOnboardingColors.textMuted,
-    marginTop: 4,
+  summaryServiceList: {
+    gap: 8,
   },
-  summaryIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(17,17,17,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: authOnboardingColors.border,
-    marginVertical: 14,
-  },
-  svcRow: {
+  summaryServiceRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 6,
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 4,
   },
-  svcTxt: {
+  summaryServiceText: {
     flex: 1,
     fontFamily: 'DMSans_400Regular',
     fontSize: 14,
+    lineHeight: 18,
     color: authOnboardingColors.text,
-    paddingRight: 8,
+  },
+  summaryPriceRow: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingTop: 4,
+    marginTop: 2,
+  },
+  summaryPriceCell: {
+    flex: 1,
+    gap: 6,
+    alignItems: 'center',
+  },
+  summaryPriceHeading: {
+    textAlign: 'center',
+    alignSelf: 'stretch',
+  },
+  summaryPriceValue: {
+    textAlign: 'center',
+    alignSelf: 'stretch',
+  },
+  errorText: {
+    marginTop: 12,
+    marginBottom: 4,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    lineHeight: 18,
+    color: authOnboardingColors.error,
+  },
+  primaryButton: {
+    marginTop: 14,
+  },
+  /** CTA under oppsummeringskortet (steg 4). */
+  completePrimaryButtonBelow: {
+    marginTop: 30,
+    alignSelf: 'stretch',
   },
 })

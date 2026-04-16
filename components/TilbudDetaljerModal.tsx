@@ -1096,7 +1096,6 @@ export default function TilbudDetaljerModal({
       <SafeAreaView style={styles.container} edges={['top']}>
         <OfferStatusHeader
           currentStatus={presentasjon.currentStatus}
-          statusSubline={presentasjon.currentStatusSubline}
           currentStatusColor={presentasjon.currentStatusColor}
           onClose={onClose}
         />

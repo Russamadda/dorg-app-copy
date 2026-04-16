@@ -1,44 +1,63 @@
 import type { ReactNode } from 'react'
-import { View, Platform } from 'react-native'
+import { Keyboard, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import AppBackground from '../AppBackground'
-import { authOnboardingColors, authOnboardingTheme } from '../../constants/authOnboardingTheme'
+import { authOnboardingColors } from '../../constants/authOnboardingTheme'
 
 type Props = {
   children: ReactNode
-  /** Ekstra padding under innhold (f.eks. flytende knapp). */
-  extraScrollHeight?: number
+  scroll?: boolean
 }
 
-/**
- * Felles skall for auth: bakgrunn, safe area, tastatur-bevisst scrolling.
- */
-export default function AuthShell({ children, extraScrollHeight = 24 }: Props) {
+export default function AuthShell({ children, scroll = true }: Props) {
   return (
-    <View style={authOnboardingTheme.screenBg}>
-      <AppBackground variant="secondary" />
-      <SafeAreaView style={{ flex: 1, zIndex: 1 }} edges={['top', 'bottom']}>
+    <View style={styles.root}>
+      <AppBackground />
+
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <StatusBar style="dark" />
-        <KeyboardAwareScrollView
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          enableOnAndroid
-          extraScrollHeight={extraScrollHeight}
-          contentContainerStyle={{
-            flexGrow: 1,
-            paddingHorizontal: 28,
-            paddingTop: Platform.OS === 'ios' ? 20 : 16,
-            paddingBottom: 28,
-          }}
-          showsVerticalScrollIndicator={false}
-        >
-          {children}
-        </KeyboardAwareScrollView>
+        <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+          {scroll ? (
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              automaticallyAdjustKeyboardInsets={false}
+            >
+              <View style={styles.content}>{children}</View>
+            </ScrollView>
+          ) : (
+            <View style={styles.content}>{children}</View>
+          )}
+        </Pressable>
       </SafeAreaView>
     </View>
   )
 }
 
 export { authOnboardingColors }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: authOnboardingColors.bg,
+  },
+  safeArea: {
+    flex: 1,
+  },
+  flex: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 24,
+  },
+})

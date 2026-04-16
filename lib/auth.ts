@@ -37,6 +37,10 @@ export function normaliserEpost(epost: string) {
   return epost.trim().toLowerCase()
 }
 
+export function erGyldigEpost(epost: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normaliserEpost(epost))
+}
+
 export function lagAuthRedirectUrl(path = '/auth/reset-password') {
   return Linking.createURL(path)
 }
@@ -61,11 +65,23 @@ export function oversettAuthFeil(melding?: string | null) {
   }
 
   if (normalisert.includes('password should be at least')) {
-    return 'Passordet er for kort.'
+    return 'Passordet må være minst 6 tegn.'
   }
 
   if (normalisert.includes('unable to validate email address')) {
     return 'E-postadressen ser ugyldig ut.'
+  }
+
+  if (normalisert.includes('invalid refresh token') || normalisert.includes('refresh token not found')) {
+    return 'Økten din var utløpt. Logg inn på nytt.'
+  }
+
+  if (normalisert.includes('same password')) {
+    return 'Velg et nytt passord som er forskjellig fra det gamle.'
+  }
+
+  if (normalisert.includes('network request failed')) {
+    return 'Kunne ikke kontakte serveren. Sjekk nettet og prøv igjen.'
   }
 
   return melding

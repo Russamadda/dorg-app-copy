@@ -1,8 +1,9 @@
 import { StyleSheet } from 'react-native'
+import { Colors } from './colors'
 
 /** Delte design-tokens for innlogging og onboarding (moderne SaaS-profil). */
 export const authOnboardingColors = {
-  bg: '#E8EDF5',
+  bg: '#F3F5F1',
   surface: 'rgba(255,255,255,0.92)',
   surfaceMuted: 'rgba(255,255,255,0.55)',
   border: 'rgba(17,17,17,0.08)',
@@ -10,11 +11,13 @@ export const authOnboardingColors = {
   text: '#111111',
   textMuted: '#5C6570',
   textSubtle: '#7B818C',
-  cta: '#1E3A5F',
-  ctaPressed: '#152A45',
+  cta: Colors.primary,
+  ctaPressed: Colors.sidebar,
   error: '#B91C1C',
   success: '#166534',
-  segmentInactive: 'rgba(17,17,17,0.06)',
+  segmentInactive: 'rgba(27,67,50,0.07)',
+  focusRing: 'rgba(27,67,50,0.18)',
+  softAccent: 'rgba(27,67,50,0.08)',
 }
 
 export const authOnboardingTheme = StyleSheet.create({
@@ -23,11 +26,10 @@ export const authOnboardingTheme = StyleSheet.create({
     backgroundColor: authOnboardingColors.bg,
   },
   brandTitle: {
-    fontFamily: 'DMSerifDisplay_400Regular',
-    fontSize: 36,
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 22,
     letterSpacing: 2,
-    color: authOnboardingColors.text,
-    textAlign: 'center',
+    color: '#111111',
   },
   brandSubtitle: {
     fontFamily: 'DMSans_400Regular',
@@ -57,7 +59,7 @@ export const authOnboardingTheme = StyleSheet.create({
   },
   cta: {
     minHeight: 54,
-    borderRadius: 14,
+    borderRadius: 22,
     backgroundColor: authOnboardingColors.cta,
     alignItems: 'center',
     justifyContent: 'center',
@@ -72,10 +74,9 @@ export const authOnboardingTheme = StyleSheet.create({
     color: '#FFFFFF',
   },
   link: {
-    fontFamily: 'DMSans_600SemiBold',
+    fontFamily: 'DMSans_500Medium',
     fontSize: 14,
     color: authOnboardingColors.cta,
-    textDecorationLine: 'underline',
   },
   errorText: {
     fontFamily: 'DMSans_400Regular',

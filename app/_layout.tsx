@@ -13,10 +13,12 @@ import {
 } from '@expo-google-fonts/dm-serif-display'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import type { Session } from '@supabase/supabase-js'
+import AppBackground from '../components/AppBackground'
 import { hentAuthCallbackParams } from '../lib/auth'
+import { clearCachedFirma, getCachedFirma } from '../lib/firmaCache'
 import { erFirmaOppsettFullfort } from '../lib/firmaSetup'
 import { subscribeFirmaOppsettEndret } from '../lib/firmaSetupEvents'
-import { supabase, hentFirma } from '../lib/supabase'
+import { supabase, hentFirma, hentLokalAuthSession, tømLokalAuthSession } from '../lib/supabase'
 import { BRAND_BACKGROUND_BASE_COLOR, prefetchBrandBackground } from '../lib/backgroundConfig'
 
 void SplashScreen.preventAutoHideAsync().catch(() => {
@@ -35,6 +37,7 @@ export default function RootLayout() {
     DMSans_700Bold,
     DMSerifDisplay_400Regular,
   })
+  const forrigeSessionUserIdRef = useRef<string | null>(null)
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   /** undefined = ikke avklart ennå (laster firma etter innlogging). */
   const [firmaOppsettKlar, setFirmaOppsettKlar] = useState<boolean | undefined>(undefined)
@@ -49,24 +52,18 @@ export default function RootLayout() {
   }, [fontsLoaded, fontError])
 
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(({ data: { session }, error }) => {
-        if (error) {
-          // Ugyldig eller utløpt refresh token i AsyncStorage — rydd lokalt og vis login.
-          void supabase.auth.signOut({ scope: 'local' })
-          setSession(null)
-          return
-        }
-        setSession(session ?? null)
-      })
+    void hentLokalAuthSession()
+      .then(s => setSession(s))
       .catch(() => {
-        void supabase.auth.signOut({ scope: 'local' })
+        void tømLokalAuthSession()
         setSession(null)
       })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession ?? null)
+      if (event === 'SIGNED_OUT') {
+        setFirmaOppsettKlar(undefined)
+      }
 
       if (event === 'PASSWORD_RECOVERY') {
         router.replace('/auth/reset-password')
@@ -81,6 +78,32 @@ export default function RootLayout() {
       return
     }
 
+    const aktivUserId = session?.user.id ?? null
+    const forrigeUserId = forrigeSessionUserIdRef.current
+
+    if (!aktivUserId) {
+      clearCachedFirma()
+      setFirmaOppsettKlar(undefined)
+    } else {
+      const cachedFirma = getCachedFirma()
+      if (cachedFirma && cachedFirma.userId !== aktivUserId) {
+        clearCachedFirma()
+      }
+
+      if (forrigeUserId && forrigeUserId !== aktivUserId) {
+        clearCachedFirma()
+        setFirmaOppsettKlar(undefined)
+      }
+    }
+
+    forrigeSessionUserIdRef.current = aktivUserId
+  }, [session])
+
+  useEffect(() => {
+    if (session === undefined) {
+      return
+    }
+
     let avbrutt = false
 
     async function synkOppsett() {
@@ -88,6 +111,17 @@ export default function RootLayout() {
         if (!avbrutt) setFirmaOppsettKlar(undefined)
         return
       }
+
+      const { data: userData, error: userError } = await supabase.auth.getUser()
+      if (userError || !userData.user || userData.user.id !== session.user.id) {
+        await tømLokalAuthSession()
+        if (!avbrutt) {
+          setSession(null)
+          setFirmaOppsettKlar(undefined)
+        }
+        return
+      }
+
       try {
         const f = await hentFirma(session.user.id)
         if (!avbrutt) setFirmaOppsettKlar(erFirmaOppsettFullfort(f))
@@ -185,6 +219,7 @@ export default function RootLayout() {
     const inAuth = rootSegment === 'auth'
     const inTabs = rootSegment === '(tabs)'
     const inBedrift = rootSegment === 'bedrift'
+    const inOnboarding = rootSegment === 'onboarding'
     const inResetPassword = inAuth && segments[1] === 'reset-password'
 
     if (!session) {
@@ -198,8 +233,8 @@ export default function RootLayout() {
       return
     }
 
-    if (!firmaOppsettKlar && !inBedrift && !inResetPassword) {
-      router.replace('/bedrift')
+    if (!firmaOppsettKlar && !inOnboarding && !inBedrift && !inResetPassword) {
+      router.replace('/onboarding')
       return
     }
 
@@ -213,18 +248,44 @@ export default function RootLayout() {
     return null
   }
 
+  const rootSegment = segments[0]
+  const visDeltAppBakgrunn =
+    rootSegment === '(tabs)' || rootSegment === 'bedrift' || rootSegment === 'onboarding'
+
   return (
-    <GestureHandlerRootView style={{ flex: 1, overflow: 'visible' }}>
+    <GestureHandlerRootView
+      style={{ flex: 1, overflow: 'visible', backgroundColor: BRAND_BACKGROUND_BASE_COLOR }}
+    >
+      {visDeltAppBakgrunn ? <AppBackground /> : null}
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: BRAND_BACKGROUND_BASE_COLOR },
+          contentStyle: { backgroundColor: 'transparent' },
         }}
       >
         <Stack.Screen name="index" />
-        <Stack.Screen name="auth" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="bedrift" options={{ gestureEnabled: true, animation: 'slide_from_right' }} />
+        <Stack.Screen
+          name="auth"
+          options={{
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
+          name="onboarding"
+          options={{
+            animation: 'slide_from_bottom',
+            animationTypeForReplace: 'push',
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
+          name="(tabs)"
+          options={{
+            animation: 'slide_from_bottom',
+            animationTypeForReplace: 'push',
+          }}
+        />
+        <Stack.Screen name="bedrift" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </GestureHandlerRootView>
   )

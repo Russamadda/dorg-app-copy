@@ -7,8 +7,9 @@ import { fabEmitter } from '../lib/fabEmitter'
 import { useBadgeCount } from '../lib/notificationState'
 import { tabBarEmitter } from '../lib/tabBarEmitter'
 import NotificationBadge from './NotificationBadge'
+import { Colors } from '../constants/colors'
 
-const ACTIVE_COLOR = '#111111'
+const ACTIVE_COLOR = Colors.primary
 const INACTIVE_COLOR = '#888888'
 const GLASS_FILL = 'rgba(255,255,255,0.14)'
 const GLASS_OVERLAY = 'rgba(255,255,255,0.18)'
@@ -286,7 +287,7 @@ const styles = StyleSheet.create({
     borderRadius: FAB_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#111111',
+    backgroundColor: Colors.primary,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
     shadowColor: '#B0BAC8',

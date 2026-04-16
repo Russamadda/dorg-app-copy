@@ -1,13 +1,10 @@
 import { StyleSheet, View } from 'react-native'
 import { Tabs } from 'expo-router'
 import { FloatingTabBar } from '../../components/FloatingTabBar'
-import AppBackground from '../../components/AppBackground'
-import { BRAND_BACKGROUND_BASE_COLOR } from '../../lib/backgroundConfig'
 
 export default function TabsLayout() {
   return (
     <View style={styles.shell}>
-      <AppBackground />
       <View style={styles.tabsFill}>
         <Tabs
           tabBar={(props) => <FloatingTabBar {...props} />}
@@ -27,7 +24,7 @@ export default function TabsLayout() {
 const styles = StyleSheet.create({
   shell: {
     flex: 1,
-    backgroundColor: BRAND_BACKGROUND_BASE_COLOR,
+    backgroundColor: 'transparent',
   },
   tabsFill: {
     flex: 1,

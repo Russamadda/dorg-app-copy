@@ -27,6 +27,7 @@ import {
   supabase,
   hentSendteTilbud,
   hentFirma,
+  hentLokalAuthSession,
   slettTilbud,
 } from '../../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../../lib/firmaCache'
@@ -64,6 +65,7 @@ import {
   skalVisePillJustering,
 } from '../../lib/tilbudNotifLogikk'
 import { hentTilbudPillAck, lagreTilbudPillAckDel } from '../../lib/tilbudPillAckStorage'
+import { Colors } from '../../constants/colors'
 
 type FilterLabel = 'Sendt' | 'Justering' | 'Godkjent' | 'Alle'
 
@@ -139,13 +141,19 @@ function enkelSøkeparam(v: string | string[] | undefined): string | undefined {
 export default function TilbudScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const { openTilbudId: openTilbudIdRaw, tilbudOpenNonce: tilbudOpenNonceRaw } =
+  const {
+    openTilbudId: openTilbudIdRaw,
+    tilbudOpenNonce: tilbudOpenNonceRaw,
+    openServicePicker: openServicePickerRaw,
+  } =
     useLocalSearchParams<{
       openTilbudId?: string | string[]
       tilbudOpenNonce?: string | string[]
+      openServicePicker?: string | string[]
     }>()
   const openTilbudIdParam = enkelSøkeparam(openTilbudIdRaw)
   const tilbudOpenNonce = enkelSøkeparam(tilbudOpenNonceRaw)
+  const openServicePickerParam = enkelSøkeparam(openServicePickerRaw)
 
   const nudgeAnim = useRef(new Animated.Value(0)).current
   const tilbudRef = useRef<Forespørsel[]>([])
@@ -154,6 +162,7 @@ export default function TilbudScreen() {
   const sisteForegroundHintMs = useRef(0)
   const nudgeKjørtForFokusRef = useRef(0)
   const sisteHåndterteTilbudOpenNonceRef = useRef<string | null>(null)
+  const sisteHåndterteServicePickerNonceRef = useRef<string | null>(null)
 
   const [tilbud, setTilbud] = useState<Forespørsel[]>([])
   const [skjulteTilbudIds, setSkjulteTilbudIds] = useState<string[]>([])
@@ -203,7 +212,7 @@ export default function TilbudScreen() {
 
   const hentTilbud = useCallback(async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession()
+      const session = await hentLokalAuthSession()
       if (!session) {
         setTilbud([])
         return
@@ -249,6 +258,23 @@ export default function TilbudScreen() {
       }
     })
   }, [tilbudFlyt.fabTrykket])
+
+  useEffect(() => {
+    if (openServicePickerParam !== '1') {
+      return
+    }
+
+    const nonce = tilbudOpenNonce ?? '__no_nonce__'
+    if (sisteHåndterteServicePickerNonceRef.current === nonce) {
+      return
+    }
+    sisteHåndterteServicePickerNonceRef.current = nonce
+
+    // Åpner "Velg tjeneste" direkte når man kommer fra onboarding-complete.
+    tilbudFlyt.fabTrykket()
+
+    router.replace('/(tabs)/tilbud')
+  }, [openServicePickerParam, router, tilbudFlyt.fabTrykket, tilbudOpenNonce])
 
   useEffect(() => {
     if (!isOfferFlowRecordingDemoEnabled()) return
@@ -956,7 +982,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   filterPillActive: {
-    backgroundColor: '#111111',
+    backgroundColor: Colors.primary,
   },
   filterPillInactive: {
     backgroundColor: '#FFFFFF',

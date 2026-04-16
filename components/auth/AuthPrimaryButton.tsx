@@ -1,9 +1,10 @@
 import {
-  TouchableOpacity,
+  Pressable,
   Text,
   ActivityIndicator,
   type StyleProp,
   type ViewStyle,
+  StyleSheet,
 } from 'react-native'
 import { authOnboardingTheme } from '../../constants/authOnboardingTheme'
 
@@ -18,17 +19,27 @@ type Props = {
 export default function AuthPrimaryButton({ label, onPress, loading, disabled, style }: Props) {
   const inaktiv = disabled || loading
   return (
-    <TouchableOpacity
-      style={[authOnboardingTheme.cta, inaktiv && authOnboardingTheme.ctaDisabled, style]}
+    <Pressable
+      style={({ pressed }) => [
+        authOnboardingTheme.cta,
+        inaktiv && authOnboardingTheme.ctaDisabled,
+        pressed && !inaktiv && styles.pressed,
+        style,
+      ]}
       onPress={onPress}
       disabled={inaktiv}
-      activeOpacity={0.88}
     >
       {loading ? (
         <ActivityIndicator color="#fff" />
       ) : (
         <Text style={authOnboardingTheme.ctaLabel}>{label}</Text>
       )}
-    </TouchableOpacity>
+    </Pressable>
   )
 }
+
+const styles = StyleSheet.create({
+  pressed: {
+    transform: [{ scale: 0.99 }],
+  },
+})
