@@ -13,7 +13,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Keyboard,
   LayoutAnimation,
   UIManager,
 } from 'react-native'
@@ -22,17 +21,16 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
-import { erFirmaOppsettFullfort } from '../lib/firmaSetup'
-import { supabase, hentFirma, oppdaterFirma, lastOppLogo, loggUt } from '../lib/supabase'
+import { LinearGradient } from 'expo-linear-gradient'
+import { hentFirma, hentLokalAuthSession, oppdaterFirma, lastOppLogo, loggUt } from '../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../lib/firmaCache'
 import { hentAutoPaminnelserEnabled, setAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
 import { tjenesterForKategori } from '../constants/tjenester'
 import type { Firma } from '../types'
 import ToastMessage from '../components/ToastMessage'
-import Onboarding from '../components/Onboarding'
 import { getStackScreenScrollBottomPadding } from '../components/FloatingTabBar'
-import AppBackground from '../components/AppBackground'
-import { BRAND_BACKGROUND_BASE_COLOR } from '../lib/backgroundConfig'
+import LeggTilTjenesterModal from '../components/LeggTilTjenesterModal'
+import { authOnboardingColors } from '../constants/authOnboardingTheme'
 
 function kapitaliser(s?: string | null) {
   if (!s) return ''
@@ -73,6 +71,61 @@ function normaliserAktiveTjenester(firma: Firma | null): string[] {
   return tjenester.slice(0, MAX_AKTIVE_TJENESTER)
 }
 
+function harTekstverdi(verdi?: string | null): boolean {
+  return Boolean(verdi?.trim())
+}
+
+function erBedriftProfilDetaljerFullfort(firma: Firma | null): boolean {
+  if (!firma) return false
+  return (
+    harTekstverdi(firma.orgNummer) &&
+    harTekstverdi(firma.telefon) &&
+    harTekstverdi(firma.epost) &&
+    harTekstverdi(firma.adresse) &&
+    harTekstverdi(firma.poststed)
+  )
+}
+
+type BedriftProfilDraft = {
+  firmanavn: string
+  orgNummer: string
+  telefon: string
+  epost: string
+  adresse: string
+  poststed: string
+  logoUrl: string
+}
+
+function byggBedriftProfilDraft(
+  firma: Firma | null,
+  registreringsEpost?: string
+): BedriftProfilDraft {
+  const registreringsEpostTrimmet = registreringsEpost?.trim() ?? ''
+  const eksisterendeEpost = firma?.epost?.trim() ?? ''
+
+  return {
+    firmanavn: firma?.firmanavn ?? '',
+    orgNummer: firma?.orgNummer ?? '',
+    telefon: firma?.telefon ?? '',
+    epost: eksisterendeEpost || registreringsEpostTrimmet,
+    adresse: firma?.adresse ?? '',
+    poststed: firma?.poststed ?? '',
+    logoUrl: firma?.logoUrl ?? '',
+  }
+}
+
+function erSammeBedriftProfilDraft(a: BedriftProfilDraft, b: BedriftProfilDraft): boolean {
+  return (
+    a.firmanavn === b.firmanavn &&
+    a.orgNummer === b.orgNummer &&
+    a.telefon === b.telefon &&
+    a.epost === b.epost &&
+    a.adresse === b.adresse &&
+    a.poststed === b.poststed &&
+    a.logoUrl === b.logoUrl
+  )
+}
+
 export default function BedriftScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -81,7 +134,11 @@ export default function BedriftScreen() {
   const [firma, setFirma] = useState<Firma | null>(cachedFirma)
   const [laster, setLaster] = useState(true)
   const [userId, setUserId] = useState('')
+  const [registreringsEpost, setRegistreringsEpost] = useState('')
   const [visModal, setVisModal] = useState(false)
+  const [profilDraft, setProfilDraft] = useState<BedriftProfilDraft>(() =>
+    byggBedriftProfilDraft(cachedFirma)
+  )
   const [toast, setToast] = useState({
     visible: false,
     message: '',
@@ -89,16 +146,26 @@ export default function BedriftScreen() {
   })
 
   const [automatiskePaminnelser, setAutomatiskePaminnelser] = useState(false)
-  const [søkeTekst, setSøkeTekst] = useState('')
-  const [søkeAktiv, setSøkeAktiv] = useState(false)
+  const [visTjenesteSheet, setVisTjenesteSheet] = useState(false)
   const [redigerPrisModal, setRedigerPrisModal] = useState<'timepris' | 'paslag' | null>(null)
   const [prisInput, setPrisInput] = useState('')
   const [hovedLogoLastFeilet, setHovedLogoLastFeilet] = useState(false)
 
-  const scrollViewRef = useRef<ScrollView>(null)
   const logoFeilToastForUrlRef = useRef<string | null>(null)
+  const profilDraftRef = useRef(profilDraft)
+  const visModalRef = useRef(visModal)
+  const sistSynketProfilDraftRef = useRef<BedriftProfilDraft>(byggBedriftProfilDraft(cachedFirma))
   const alleTjenester = firma?.tjenester ?? []
   const aktiveTjenester = normaliserAktiveTjenester(firma)
+  const visProfilFullforHint = !erBedriftProfilDetaljerFullfort(firma)
+  const tilgjengeligeTjenester = useMemo(
+    () => tjenesterForKategori(firma?.fagkategori),
+    [firma?.fagkategori]
+  )
+  const persistertProfilDraft = useMemo(
+    () => byggBedriftProfilDraft(firma, registreringsEpost),
+    [firma, registreringsEpost]
+  )
 
   function setFirmaOgCache(
     nesteFirma: Firma | null | ((forrige: Firma | null) => Firma | null)
@@ -113,23 +180,16 @@ export default function BedriftScreen() {
     })
   }
 
-  const filtrerteTjenester = useMemo(() => {
-    if (!søkeTekst.trim()) return []
-    const q = søkeTekst.toLowerCase()
-    const pool = tjenesterForKategori(firma?.fagkategori)
-    return pool.filter(
-      t => t.toLowerCase().includes(q) && !(firma?.tjenester ?? []).includes(t)
-    )
-  }, [søkeTekst, firma?.tjenester, firma?.fagkategori])
-
   const lastData = useCallback(async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession()
+      const session = await hentLokalAuthSession()
       if (!session) {
         setFirmaOgCache(null)
+        setRegistreringsEpost('')
         return
       }
       setUserId(session.user.id)
+      setRegistreringsEpost(session.user.email?.trim() ?? '')
       const firmaData = await hentFirma(session.user.id)
       if (firmaData) {
         setFirmaOgCache({
@@ -192,8 +252,51 @@ export default function BedriftScreen() {
     logoFeilToastForUrlRef.current = null
   }, [firma?.logoUrl])
 
+  useEffect(() => {
+    profilDraftRef.current = profilDraft
+  }, [profilDraft])
+
+  useEffect(() => {
+    visModalRef.current = visModal
+  }, [visModal])
+
+  useEffect(() => {
+    const forrigeSynketDraft = sistSynketProfilDraftRef.current
+    const harUlagredeEndringer = !erSammeBedriftProfilDraft(
+      profilDraftRef.current,
+      forrigeSynketDraft
+    )
+
+    sistSynketProfilDraftRef.current = persistertProfilDraft
+
+    if (visModalRef.current && harUlagredeEndringer) {
+      return
+    }
+
+    setProfilDraft(forrige =>
+      erSammeBedriftProfilDraft(forrige, persistertProfilDraft)
+        ? forrige
+        : persistertProfilDraft
+    )
+  }, [persistertProfilDraft])
+
   function visToast(message: string, type: 'success' | 'error' = 'success') {
     setToast({ visible: true, message, type })
+  }
+
+  function oppdaterProfilDraft(
+    oppdaterer: (forrige: BedriftProfilDraft) => BedriftProfilDraft
+  ) {
+    setProfilDraft(forrige => oppdaterer(forrige))
+  }
+
+  function handterTilbake() {
+    if (router.canGoBack()) {
+      router.back()
+      return
+    }
+
+    router.replace('/(tabs)')
   }
 
   async function fjernTjeneste(tjeneste: string) {
@@ -216,18 +319,19 @@ export default function BedriftScreen() {
     }
   }
 
-  async function leggTilTjeneste(tjeneste: string) {
-    if (!userId || !firma || !tjeneste.trim()) return
+  async function leggTilTjeneste(tjeneste: string): Promise<boolean> {
+    const trimmetTjeneste = tjeneste.trim()
+    if (!userId || !firma || !trimmetTjeneste) return false
     const gjeldende = firma.tjenester ?? []
-    if (gjeldende.includes(tjeneste)) return
+    if (gjeldende.includes(trimmetTjeneste)) return false
     if (gjeldende.length >= MAX_TJENESTER) {
       visToast(`Du kan maks ha ${MAX_TJENESTER} tjenester i listen`, 'error')
-      return
+      return false
     }
-    const oppdaterte = [...gjeldende, tjeneste]
+    const oppdaterte = [...gjeldende, trimmetTjeneste]
     const oppdaterteAktive =
       aktiveTjenester.length < MAX_AKTIVE_TJENESTER
-        ? [...aktiveTjenester, tjeneste]
+        ? [...aktiveTjenester, trimmetTjeneste]
         : aktiveTjenester
     try {
       await oppdaterFirma(userId, {
@@ -237,8 +341,10 @@ export default function BedriftScreen() {
       setFirmaOgCache(f =>
         f ? { ...f, tjenester: oppdaterte, aktiveTjenester: oppdaterteAktive } : f
       )
+      return true
     } catch (e) {
       console.error(e)
+      return false
     }
   }
 
@@ -320,18 +426,6 @@ export default function BedriftScreen() {
     )
   }
 
-  if (!erFirmaOppsettFullfort(firma)) {
-    return (
-      <Onboarding
-        userId={userId}
-        firma={firma}
-        onFerdig={oppdatert => {
-          setFirmaOgCache(oppdatert)
-        }}
-      />
-    )
-  }
-
   if (!firma) {
     return (
       <View style={styles.loadingContainer}>
@@ -347,7 +441,6 @@ export default function BedriftScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <AppBackground />
       <ToastMessage
         message={toast.message}
         visible={toast.visible}
@@ -369,8 +462,8 @@ export default function BedriftScreen() {
 
         <View style={styles.headerBar}>
           <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.iconButton}
+            onPress={handterTilbake}
+            style={[styles.iconButton, styles.backButtonHeader]}
             activeOpacity={0.82}
             accessibilityLabel="Tilbake"
           >
@@ -379,19 +472,39 @@ export default function BedriftScreen() {
 
           <Text style={styles.headerTitle}>Bedrift</Text>
 
-          <TouchableOpacity
-            onPress={() => setVisModal(true)}
-            style={styles.iconButton}
-            activeOpacity={0.82}
-            accessibilityLabel="Innstillinger"
-          >
-            <Ionicons name="settings-outline" size={18} color="#444444" />
-          </TouchableOpacity>
+          <View style={styles.settingsActionWrap}>
+            {visProfilFullforHint ? (
+              <TouchableOpacity
+                onPress={() => setVisModal(true)}
+                style={styles.profilHintPill}
+                activeOpacity={0.86}
+                accessibilityRole="button"
+                accessibilityLabel="Fullfør profilen"
+              >
+                <Text style={styles.profilHintPillLabel}>Fullfør profilen</Text>
+                <Ionicons
+                  name="settings-outline"
+                  size={14}
+                  color="#FFFFFF"
+                  style={styles.profilHintGear}
+                />
+              </TouchableOpacity>
+            ) : null}
+            {!visProfilFullforHint ? (
+              <TouchableOpacity
+                onPress={() => setVisModal(true)}
+                style={styles.iconButton}
+                activeOpacity={0.82}
+                accessibilityLabel="Innstillinger"
+              >
+                <Ionicons name="settings-outline" size={18} color="#444444" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
       </View>
 
       <ScrollView
-        ref={scrollViewRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[
@@ -530,65 +643,17 @@ export default function BedriftScreen() {
             )
           })}
 
-          <View style={styles.searchSection}>
-            <View style={styles.searchField}>
-              <Ionicons name="search-outline" size={16} color="#888888" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Søk etter tjeneste..."
-                placeholderTextColor="#AAAAAA"
-                value={søkeTekst}
-                onChangeText={setSøkeTekst}
-                onFocus={() => {
-                  setSøkeAktiv(true)
-                  setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100)
-                }}
-                onBlur={() => {
-                  if (!søkeTekst) setSøkeAktiv(false)
-                }}
-                maxLength={30}
-                returnKeyType="done"
-              />
-
-              {søkeTekst.length > 0 ? (
-                <TouchableOpacity
-                  onPress={() => {
-                    leggTilTjeneste(søkeTekst.trim())
-                    setSøkeTekst('')
-                    setSøkeAktiv(false)
-                    Keyboard.dismiss()
-                  }}
-                  style={styles.addButton}
-                  accessibilityLabel="Legg til tjeneste"
-                >
-                  <Ionicons name="add" size={18} color="#FFFFFF" />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            {søkeAktiv && søkeTekst.length > 0 && filtrerteTjenester.length > 0 ? (
-              <View style={styles.searchResults}>
-                {filtrerteTjenester.slice(0, 5).map((t, index) => (
-                  <TouchableOpacity
-                    key={t}
-                    onPress={() => {
-                      leggTilTjeneste(t)
-                      setSøkeTekst('')
-                      setSøkeAktiv(false)
-                      Keyboard.dismiss()
-                    }}
-                    style={[
-                      styles.searchResultRow,
-                      index < Math.min(filtrerteTjenester.length, 5) - 1 && styles.searchResultBorder,
-                    ]}
-                    activeOpacity={0.86}
-                  >
-                    <Ionicons name="add-circle-outline" size={18} color="#111111" />
-                    <Text style={styles.searchResultText}>{t}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : null}
+          <View style={styles.addServicesSection}>
+            <TouchableOpacity
+              onPress={() => setVisTjenesteSheet(true)}
+              style={styles.addServicesButton}
+              activeOpacity={0.88}
+              accessibilityRole="button"
+              accessibilityLabel="Legg til tjenester"
+            >
+              <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.addServicesButtonText}>Legg til tjenester</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -614,13 +679,26 @@ export default function BedriftScreen() {
         visible={visModal}
         onClose={() => setVisModal(false)}
         firma={firma}
+        draft={profilDraft}
         userId={userId}
+        onDraftChange={oppdaterProfilDraft}
         onBrukerMerknad={visToast}
         onLagret={oppdatert => {
+          const nesteDraft = byggBedriftProfilDraft(oppdatert, registreringsEpost)
+          sistSynketProfilDraftRef.current = nesteDraft
+          setProfilDraft(nesteDraft)
           setFirmaOgCache(oppdatert)
           setVisModal(false)
           visToast('Endringer lagret')
         }}
+      />
+      <LeggTilTjenesterModal
+        visible={visTjenesteSheet}
+        onClose={() => setVisTjenesteSheet(false)}
+        tilgjengeligeTjenester={tilgjengeligeTjenester}
+        valgteTjenester={alleTjenester}
+        maxTjenester={MAX_TJENESTER}
+        onAddService={leggTilTjeneste}
       />
     </SafeAreaView>
   )
@@ -657,42 +735,27 @@ function RedigerModal({
   visible,
   onClose,
   firma,
+  draft,
   userId,
+  onDraftChange,
   onLagret,
   onBrukerMerknad,
 }: {
   visible: boolean
   onClose: () => void
   firma: Firma | null
+  draft: BedriftProfilDraft
   userId: string
+  onDraftChange: (oppdaterer: (forrige: BedriftProfilDraft) => BedriftProfilDraft) => void
   onLagret: (f: Firma) => void
   onBrukerMerknad?: (message: string, type: 'success' | 'error') => void
 }) {
-  const [firmanavn, setFirmanavn] = useState(firma?.firmanavn ?? '')
-  const [orgNummer, setOrgNummer] = useState(firma?.orgNummer ?? '')
-  const [telefon, setTelefon] = useState(firma?.telefon ?? '')
-  const [epost, setEpost] = useState(firma?.epost ?? '')
-  const [adresse, setAdresse] = useState(firma?.adresse ?? '')
-  const [poststed, setPoststed] = useState(firma?.poststed ?? '')
-  const [logoUrl, setLogoUrl] = useState(firma?.logoUrl ?? '')
   const [lagrer, setLagrer] = useState(false)
   const logoForhandsvisningFeiletForUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (visible && firma) {
-      setFirmanavn(firma.firmanavn ?? '')
-      setOrgNummer(firma.orgNummer ?? '')
-      setTelefon(firma.telefon ?? '')
-      setEpost(firma.epost ?? '')
-      setAdresse(firma.adresse ?? '')
-      setPoststed(firma.poststed ?? '')
-      setLogoUrl(firma.logoUrl ?? '')
-    }
-  }, [visible, firma])
-
-  useEffect(() => {
     logoForhandsvisningFeiletForUrlRef.current = null
-  }, [logoUrl])
+  }, [draft.logoUrl])
 
   async function velgLogo() {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -704,7 +767,7 @@ function RedigerModal({
     if (!result.canceled && result.assets[0] && userId) {
       try {
         const url = await lastOppLogo(result.assets[0].uri, userId)
-        setLogoUrl(url)
+        onDraftChange(forrige => ({ ...forrige, logoUrl: url }))
       } catch (e) {
         console.error('[bedrift] Logo-opplasting feilet:', e)
         onBrukerMerknad?.('Kunne ikke laste opp logo. Prøv igjen.', 'error')
@@ -717,25 +780,25 @@ function RedigerModal({
     setLagrer(true)
     try {
       await oppdaterFirma(userId, {
-        firmanavn,
-        orgNummer,
-        telefon,
-        epost,
-        adresse,
-        poststed,
-        logoUrl,
+        firmanavn: draft.firmanavn,
+        orgNummer: draft.orgNummer,
+        telefon: draft.telefon,
+        epost: draft.epost,
+        adresse: draft.adresse,
+        poststed: draft.poststed,
+        logoUrl: draft.logoUrl,
       })
       onLagret({
         ...(firma ?? { id: '', userId }),
         id: firma?.id ?? '',
         userId,
-        firmanavn,
-        orgNummer,
-        telefon,
-        epost,
-        adresse,
-        poststed,
-        logoUrl,
+        firmanavn: draft.firmanavn,
+        orgNummer: draft.orgNummer,
+        telefon: draft.telefon,
+        epost: draft.epost,
+        adresse: draft.adresse,
+        poststed: draft.poststed,
+        logoUrl: draft.logoUrl,
         timepris: firma?.timepris,
         materialPaslag: firma?.materialPaslag,
         fagkategori: firma?.fagkategori,
@@ -751,76 +814,121 @@ function RedigerModal({
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-      <SafeAreaView style={modalStyles.container} edges={['top', 'bottom']}>
+      <SafeAreaView style={modalStyles.container} edges={['top']}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={modalStyles.flex}
         >
           <View style={modalStyles.header}>
+            <View style={modalStyles.headerSideSpacer} />
             <Text style={modalStyles.title}>Bedriftsprofil</Text>
             <TouchableOpacity onPress={onClose} style={modalStyles.closeButton} activeOpacity={0.82}>
-              <Ionicons name="close" size={18} color="#444444" />
+              <Ionicons name="close" size={24} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
 
           <ScrollView contentContainerStyle={modalStyles.content} showsVerticalScrollIndicator={false}>
-            <TouchableOpacity style={modalStyles.logoBox} onPress={velgLogo} activeOpacity={0.86}>
-              {logoUrl ? (
-                <Image
-                  source={{ uri: logoUrl }}
-                  style={modalStyles.logoImage}
-                  resizeMode="cover"
-                  onError={() => {
-                    console.warn('[bedrift] Logo forhåndsvisning feilet (modal):', logoUrl)
-                    if (logoForhandsvisningFeiletForUrlRef.current !== logoUrl) {
-                      logoForhandsvisningFeiletForUrlRef.current = logoUrl
-                      onBrukerMerknad?.(
-                        'Logo ble lagret, men kunne ikke vises ennå.',
-                        'error'
+            <View style={modalStyles.logoSection}>
+              <TouchableOpacity style={modalStyles.logoBox} onPress={velgLogo} activeOpacity={0.86}>
+                {draft.logoUrl ? (
+                  <Image
+                    source={{ uri: draft.logoUrl }}
+                    style={modalStyles.logoImage}
+                    resizeMode="cover"
+                    onError={() => {
+                      console.warn(
+                        '[bedrift] Logo forhåndsvisning feilet (modal):',
+                        draft.logoUrl
                       )
-                    }
-                  }}
-                />
-              ) : (
-                <>
-                  <Ionicons name="add-outline" size={28} color="#888888" />
-                  <Text style={modalStyles.logoText}>Last opp logo</Text>
-                </>
-              )}
-            </TouchableOpacity>
+                      if (logoForhandsvisningFeiletForUrlRef.current !== draft.logoUrl) {
+                        logoForhandsvisningFeiletForUrlRef.current = draft.logoUrl
+                        onBrukerMerknad?.(
+                          'Logo ble lagret, men kunne ikke vises ennå.',
+                          'error'
+                        )
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    <Ionicons name="add-outline" size={28} color="#7B818C" />
+                    <Text style={modalStyles.logoText}>Legg til logo</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
 
-            <FeltInput label="FIRMANAVN" value={firmanavn} onChangeText={setFirmanavn} />
-            <FeltInput
-              label="ORG.NUMMER"
-              value={orgNummer}
-              onChangeText={setOrgNummer}
-              keyboardType="number-pad"
-            />
-            <FeltInput
-              label="TELEFON"
-              value={telefon}
-              onChangeText={setTelefon}
-              keyboardType="phone-pad"
-            />
-            <FeltInput
-              label="E-POST"
-              value={epost}
-              onChangeText={setEpost}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            <FeltInput
-              label="ADRESSE"
-              value={adresse}
-              onChangeText={setAdresse}
-              autoCapitalize="words"
-            />
-            <FeltInput
-              label="POSTSTED"
-              value={poststed}
-              onChangeText={setPoststed}
-              autoCapitalize="words"
-            />
+            <View style={modalStyles.sectionGroup}>
+              <Text style={modalStyles.sectionTitle}>Bedriftsinformasjon</Text>
+              <FeltInput
+                label="Firmanavn"
+                value={draft.firmanavn}
+                onChangeText={verdi =>
+                  onDraftChange(forrige => ({ ...forrige, firmanavn: verdi }))
+                }
+              />
+              <FeltInput
+                label="Orgnr"
+                value={draft.orgNummer}
+                onChangeText={verdi =>
+                  onDraftChange(forrige => ({ ...forrige, orgNummer: verdi }))
+                }
+                keyboardType="number-pad"
+              />
+              <FeltInput
+                label="Bedrift telefon"
+                value={draft.telefon}
+                onChangeText={verdi =>
+                  onDraftChange(forrige => ({ ...forrige, telefon: verdi }))
+                }
+                keyboardType="phone-pad"
+              />
+              <FeltInput
+                label="Bedrift epost"
+                value={draft.epost}
+                onChangeText={verdi => onDraftChange(forrige => ({ ...forrige, epost: verdi }))}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={modalStyles.sectionDividerWrap} pointerEvents="none">
+              <LinearGradient
+                colors={[
+                  'rgba(74,222,128,0)',
+                  'rgba(74,222,128,0.05)',
+                  'rgba(74,222,128,0.2)',
+                  'rgba(74,222,128,0.4)',
+                  'rgba(74,222,128,0.2)',
+                  'rgba(74,222,128,0.05)',
+                  'rgba(74,222,128,0)',
+                ]}
+                locations={[0, 0.18, 0.38, 0.5, 0.62, 0.82, 1]}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={modalStyles.sectionDivider}
+              />
+            </View>
+
+            <View style={modalStyles.sectionGroup}>
+              <Text style={modalStyles.sectionTitle}>Adresseinfo</Text>
+              <FeltInput
+                label="Bedriftsadresse"
+                value={draft.adresse}
+                onChangeText={verdi =>
+                  onDraftChange(forrige => ({ ...forrige, adresse: verdi }))
+                }
+                autoCapitalize="words"
+              />
+              <FeltInput
+                label="Poststed"
+                value={draft.poststed}
+                onChangeText={verdi =>
+                  onDraftChange(forrige => ({ ...forrige, poststed: verdi }))
+                }
+                autoCapitalize="words"
+              />
+            </View>
 
             <TouchableOpacity
               style={[modalStyles.saveButton, lagrer && modalStyles.saveButtonDisabled]}
@@ -831,7 +939,14 @@ function RedigerModal({
               {lagrer ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={modalStyles.saveButtonText}>Lagre endringer</Text>
+                <LinearGradient
+                  colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={modalStyles.saveButtonGradient}
+                >
+                  <Text style={modalStyles.saveButtonText}>Lagre endringer</Text>
+                </LinearGradient>
               )}
             </TouchableOpacity>
           </ScrollView>
@@ -872,11 +987,11 @@ function FeltInput({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: BRAND_BACKGROUND_BASE_COLOR,
+    backgroundColor: 'transparent',
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: BRAND_BACKGROUND_BASE_COLOR,
+    backgroundColor: 'transparent',
   },
   loadingIndicator: {
     marginTop: 100,
@@ -904,15 +1019,25 @@ const styles = StyleSheet.create({
   headerBar: {
     minHeight: 32,
     paddingHorizontal: 0,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
+    position: 'relative',
   },
   headerTitle: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 15,
     color: '#111111',
+    textAlign: 'center',
+  },
+  settingsActionWrap: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   iconButton: {
     width: 32,
@@ -921,6 +1046,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+  },
+  backButtonHeader: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+  },
+  profilHintPill: {
+    position: 'relative',
+    overflow: 'visible',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.48)',
+    backgroundColor: 'rgba(24,100,58,0.96)',
+    minHeight: 32,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    gap: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profilHintGear: {
+    marginTop: -0.25,
+  },
+  profilHintPillLabel: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#FFFFFF',
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -1056,7 +1210,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxActive: {
-    backgroundColor: '#111111',
+    backgroundColor: '#1B4332',
   },
   checkboxInactive: {
     backgroundColor: 'transparent',
@@ -1077,59 +1231,23 @@ const styles = StyleSheet.create({
   deleteButton: {
     padding: 6,
   },
-  searchSection: {
+  addServicesSection: {
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 14,
   },
-  searchField: {
+  addServicesButton: {
+    minHeight: 54,
+    borderRadius: 22,
+    backgroundColor: authOnboardingColors.cta,
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F4F5F8',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    gap: 8,
-    minHeight: 44,
-  },
-  searchInput: {
-    flex: 1,
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    color: '#111111',
-  },
-  addButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#111111',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
   },
-  searchResults: {
-    marginTop: 8,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    shadowColor: '#B0BAC8',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  searchResultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  searchResultBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F0F0F0',
-  },
-  searchResultText: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontFamily: 'DMSans_400Regular',
-    color: '#111111',
+  addServicesButtonText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
   },
   settingsCard: {
     backgroundColor: '#FFFFFF',
@@ -1186,7 +1304,7 @@ const styles = StyleSheet.create({
 const modalStyles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EEF1F6',
+    backgroundColor: '#000000',
   },
   flex: {
     flex: 1,
@@ -1201,13 +1319,22 @@ const modalStyles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: 'transparent',
+    paddingTop: 14,
+    paddingBottom: 14,
+    backgroundColor: '#000000',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  headerSideSpacer: {
+    width: 38,
+    height: 38,
   },
   title: {
     fontFamily: 'DMSans_700Bold',
-    fontSize: 22,
-    color: '#111111',
+    fontSize: 24,
+    color: '#FFFFFF',
+    flex: 1,
+    textAlign: 'center',
   },
   closeButton: {
     width: 38,
@@ -1219,76 +1346,105 @@ const modalStyles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingTop: 84,
-    paddingBottom: 40,
+    paddingTop: 92,
+    paddingBottom: 24,
+  },
+  logoSection: {
+    marginBottom: 18,
+    alignItems: 'center',
+  },
+  sectionGroup: {
+    marginBottom: 14,
+  },
+  sectionTitle: {
+    marginBottom: 10,
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    lineHeight: 18,
+    color: 'rgba(255,255,255,0.6)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.75,
+    textAlign: 'center',
+  },
+  sectionDividerWrap: {
+    marginTop: 2,
+    marginBottom: 14,
+    marginHorizontal: -6,
+  },
+  sectionDivider: {
+    height: 2,
+    borderRadius: 1,
+    width: '100%',
   },
   logoBox: {
-    width: 120,
-    height: 120,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    width: 124,
+    height: 124,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: '#1A1A1C',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
-    marginBottom: 24,
     overflow: 'hidden',
-    shadowColor: '#B0BAC8',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 6,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
   },
   logoImage: {
-    width: 120,
-    height: 120,
+    width: 124,
+    height: 124,
   },
   logoText: {
-    marginTop: 6,
+    marginBottom: 6,
+    marginTop: 7,
     fontSize: 13,
     lineHeight: 18,
-    fontFamily: 'DMSans_400Regular',
-    color: '#888888',
+    fontFamily: 'DMSans_500Medium',
+    color: 'rgba(255,255,255,0.52)',
   },
   fieldGroup: {
-    marginBottom: 14,
+    marginBottom: 11,
   },
   fieldLabel: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontFamily: 'DMSans_700Bold',
-    color: '#888888',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: 6,
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    lineHeight: 18,
+    color: 'rgba(255,255,255,0.92)',
+    marginBottom: 7,
+    marginLeft: 6,
   },
   fieldInput: {
-    height: 52,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    minHeight: 56,
+    backgroundColor: '#1A1A1C',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
     paddingHorizontal: 16,
     fontFamily: 'DMSans_400Regular',
     fontSize: 16,
-    color: '#111111',
-    shadowColor: '#B0BAC8',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 3,
+    color: '#FFFFFF',
   },
   saveButton: {
-    height: 48,
-    backgroundColor: '#111111',
-    borderRadius: 999,
+    minHeight: 54,
+    borderRadius: 22,
+    overflow: 'hidden',
+    marginTop: 12,
+    marginBottom: 2,
+  },
+  saveButtonGradient: {
+    minHeight: 54,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
   },
   saveButtonDisabled: {
     opacity: 0.7,
   },
   saveButtonText: {
     fontFamily: 'DMSans_700Bold',
-    fontSize: 15,
+    fontSize: 16,
     color: '#FFFFFF',
   },
 })
