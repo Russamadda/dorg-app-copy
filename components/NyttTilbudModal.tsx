@@ -14,7 +14,6 @@ import {
   ScrollView,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   Keyboard,
   StyleSheet,
   ActivityIndicator,
@@ -51,6 +50,7 @@ import { beregnTilbudPrisLinjer } from '../lib/tilbudPris'
 import { Picker } from '@react-native-picker/picker'
 import { SkeletonLoader } from './SkeletonLoader'
 import { KundeKontaktKalender, startOfLocalDay } from './KundeKontaktKalender'
+import MaterialSpesifiseringScreen from './MaterialSpesifiseringScreen'
 import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import type { Firma, Forespørsel } from '../types'
 import { resolveJobbBeskrivelsePlaceholder } from '../constants/tjenestePlaceholders'
@@ -85,6 +85,17 @@ import {
   typeTextIncremental,
 } from '../lib/demoRecording/offerFlowDemoPrimitives'
 import { byggStubTilbudForRecordingDemo } from '../lib/demoRecording/stubTilbudForRecordingDemo'
+import {
+  byggMaterialSpesifiseringRad,
+  byggMaterialSpesifiseringSignatur,
+  composeOfferTextWithMaterialOverview,
+  fjernMaterialoversiktFraTilbudTekst,
+  harBrukbareMaterialrader,
+  harMaterialraderForTekst,
+  serialiserMaterialSpesifiseringRader,
+  summerMaterialSpesifisering,
+  type MaterialSpesifiseringRad,
+} from '../lib/materialSpesifisering'
 
 const TIMER_VERDIER = [
   0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -99,6 +110,38 @@ const MATERIALE_VERDIER = [
 
 function formatTimer(v: number): string {
   return `${v.toLocaleString('nb-NO')} t`
+}
+
+function oppdaterPrislinjerITilbudstekst(
+  tekst: string,
+  priser: {
+    materialInklMva: number
+    arbeidInklMva: number
+    totalInklMva: number
+  }
+): string {
+  const materialLinje = `Materialer inkl. mva: kr ${priser.materialInklMva.toLocaleString('nb-NO')}`
+  const arbeidLinje = `Arbeid inkl. mva: kr ${priser.arbeidInklMva.toLocaleString('nb-NO')}`
+  const totalLinje = `Totalt inkl. mva: kr ${priser.totalInklMva.toLocaleString('nb-NO')}`
+  const linjer = tekst.split('\n')
+  const prisIndeks = linjer.findIndex(linje => /^Pris:\s*$/i.test(linje.trim()))
+  if (prisIndeks === -1) return tekst
+
+  const erNySeksjon = (linje: string) =>
+    /^(Dette er inkludert|Dette er avtalt|Praktiske hensyn|Viktig å merke seg|Med vennlig hilsen)\s*:/i.test(
+      linje.trim()
+    )
+
+  let sluttIndeks = prisIndeks + 1
+  while (sluttIndeks < linjer.length) {
+    const trimmet = linjer[sluttIndeks].trim()
+    if (trimmet && erNySeksjon(trimmet)) break
+    sluttIndeks += 1
+  }
+
+  const prisBlokk = [materialLinje, arbeidLinje, '─────────────────────────────────────', totalLinje]
+  linjer.splice(prisIndeks + 1, sluttIndeks - (prisIndeks + 1), '', ...prisBlokk)
+  return linjer.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 
 interface Props {
@@ -216,6 +259,11 @@ export default function NyttTilbudModal({
 
   const [redigerModus, setRedigerModus] = useState(false)
   const [redigerbarTekst, setRedigerbarTekst] = useState('')
+  const [visMaterialSpesifisering, setVisMaterialSpesifisering] = useState(false)
+  const [brukMaterialerITilbudstekst, setBrukMaterialerITilbudstekst] = useState(false)
+  const [materialSpesifiseringRader, setMaterialSpesifiseringRader] = useState<MaterialSpesifiseringRad[]>([])
+  const [materialSpesifiseringAppliedSignature, setMaterialSpesifiseringAppliedSignature] =
+    useState<string | null>(null)
 
   const [sender, setSender] = useState(false)
   const [feil, setFeil] = useState<{
@@ -261,6 +309,10 @@ export default function NyttTilbudModal({
 
     setRedigerModus(false)
     setRedigerbarTekst('')
+    setVisMaterialSpesifisering(false)
+    setBrukMaterialerITilbudstekst(false)
+    setMaterialSpesifiseringRader([])
+    setMaterialSpesifiseringAppliedSignature(null)
 
     setSender(false)
     setFeil({})
@@ -381,6 +433,10 @@ export default function NyttTilbudModal({
       setRedigerModus(false)
       setIsGenerating(false)
     }
+    setVisMaterialSpesifisering(false)
+    setBrukMaterialerITilbudstekst(false)
+    setMaterialSpesifiseringRader([])
+    setMaterialSpesifiseringAppliedSignature(null)
 
     setKundeNavn('')
     setKundeTelefon('')
@@ -438,18 +494,51 @@ export default function NyttTilbudModal({
 
   function byggForhåndsvisningTekst(): string {
     if (!generertTekst) return ''
-    if (!kundeNavn.trim()) return generertTekst
-    return finaliserTilbudTekstSync({
-      tilbudTekst: generertTekst,
-      kundeNavn: kundeNavn.trim(),
-      foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
+    const baseTekst = fjernMaterialoversiktFraTilbudTekst(generertTekst)
+    const baseTekstMedOppdatertPris = oppdaterPrislinjerITilbudstekst(baseTekst, {
+      materialInklMva,
+      arbeidInklMva,
+      totalInklMva,
     })
+    const finalisert = !kundeNavn.trim()
+      ? baseTekstMedOppdatertPris
+      : finaliserTilbudTekstSync({
+          tilbudTekst: baseTekstMedOppdatertPris,
+          kundeNavn: kundeNavn.trim(),
+          foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
+        })
+
+    return brukMaterialerITilbudstekst
+      ? composeOfferTextWithMaterialOverview(finalisert, materialSpesifiseringRader)
+      : finalisert
   }
 
   function lagreRedigering() {
-    setGenerertTekst(redigerbarTekst)
-    setRåGenerertTekst(redigerbarTekst)
+    const rensetTekst = fjernMaterialoversiktFraTilbudTekst(redigerbarTekst)
+    setGenerertTekst(rensetTekst)
+    setRåGenerertTekst(rensetTekst)
     setRedigerModus(false)
+  }
+
+  function lagreMaterialrad(rad: MaterialSpesifiseringRad) {
+    setMaterialSpesifiseringRader(current => {
+      const nesteRad = byggMaterialSpesifiseringRad(rad)
+      const finnes = current.some(item => item.id === nesteRad.id)
+      return finnes
+        ? current.map(item => (item.id === nesteRad.id ? nesteRad : item))
+        : [...current, nesteRad]
+    })
+  }
+
+  function slettMaterialrad(id: string) {
+    setMaterialSpesifiseringRader(current => current.filter(rad => rad.id !== id))
+  }
+
+  function brukSpesifisertMaterialsum(brukITilbudstekst: boolean) {
+    if (!materialSpesifiseringRader.length) return
+    setBrukMaterialerITilbudstekst(brukITilbudstekst)
+    setMateriale(spesifisertMaterialsum)
+    setMaterialSpesifiseringAppliedSignature(materialSpesifiseringSignatur)
   }
 
   function tilbakeTilSkjemaFraBeskrivelse() {
@@ -650,6 +739,9 @@ export default function NyttTilbudModal({
     setGenerellFeil('')
     setIsGenerating(true)
     setErGenerert(true)
+    setVisMaterialSpesifisering(false)
+    setBrukMaterialerITilbudstekst(false)
+    setMaterialSpesifiseringRader([])
 
     try {
       if (shouldUseStubAiInOfferFlowRecordingDemo() && recordingDemoRunningRef.current) {
@@ -726,13 +818,21 @@ export default function NyttTilbudModal({
 
     try {
       const sendtDato = new Date().toISOString()
-      const kildetekst = råGenerertTekst || generertTekst
+      const kildetekst = fjernMaterialoversiktFraTilbudTekst(råGenerertTekst || generertTekst)
       const tekstUtenKortlinje = fjernKortLinje(kildetekst)
-      const ferdigTekst = finaliserTilbudTekstSync({
-        tilbudTekst: tekstUtenKortlinje,
+      const tekstMedOppdatertPris = oppdaterPrislinjerITilbudstekst(tekstUtenKortlinje, {
+        materialInklMva,
+        arbeidInklMva,
+        totalInklMva,
+      })
+      const finalisertTekst = finaliserTilbudTekstSync({
+        tilbudTekst: tekstMedOppdatertPris,
         kundeNavn: kundeNavn.trim(),
         foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
       })
+      const ferdigTekst = brukMaterialerITilbudstekst
+        ? composeOfferTextWithMaterialOverview(finalisertTekst, materialSpesifiseringRader)
+        : finalisertTekst
       const eksisterendeUtkastId = utkastRadIdRef.current
       let tilbudId: string
       let firmaIdSend: string
@@ -800,6 +900,9 @@ export default function NyttTilbudModal({
         firmaId: firmaIdSend,
         opprettetDato: sendtDato,
         versjon: versjonSend,
+        metadata: {
+          materialSpesifiseringRader: serialiserMaterialSpesifiseringRader(materialSpesifiseringRader),
+        },
       })
 
       if (isOfferFlowRecordingDemoEnabled() && recordingDemoRunningRef.current) {
@@ -838,6 +941,27 @@ export default function NyttTilbudModal({
     !!kundeEpost.trim() &&
     erGyldigEpost(kundeEpost) &&
     !!prosjektAdresse.trim()
+  const spesifisertMaterialsum = useMemo(
+    () => summerMaterialSpesifisering(materialSpesifiseringRader),
+    [materialSpesifiseringRader]
+  )
+  const materialSpesifiseringSignatur = useMemo(
+    () => byggMaterialSpesifiseringSignatur(materialSpesifiseringRader),
+    [materialSpesifiseringRader]
+  )
+  const kanOppdatereMaterialpris = harBrukbareMaterialrader(materialSpesifiseringRader)
+  const kanBrukeMaterialerITekst = harMaterialraderForTekst(materialSpesifiseringRader)
+  const materialprisErOppdatertFraSpesifisering =
+    kanOppdatereMaterialpris &&
+    materialSpesifiseringAppliedSignature !== null &&
+    materialSpesifiseringAppliedSignature === materialSpesifiseringSignatur &&
+    materiale === spesifisertMaterialsum
+
+  useEffect(() => {
+    if (!kanBrukeMaterialerITekst && brukMaterialerITilbudstekst) {
+      setBrukMaterialerITilbudstekst(false)
+    }
+  }, [kanBrukeMaterialerITekst, brukMaterialerITilbudstekst])
 
   function åpneKundeSkjema() {
     setGenerellFeil('')
@@ -1186,7 +1310,6 @@ export default function NyttTilbudModal({
             </TouchableOpacity>
           </View>
 
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.flex}>
             {!erGenerert && (
               <View style={styles.screen}>
@@ -1504,6 +1627,7 @@ export default function NyttTilbudModal({
                 </ScrollView>
 
                 <View
+                  pointerEvents="box-none"
                   style={[
                     styles.fixedFooter,
                     styles.fixedFooterPreview,
@@ -1543,7 +1667,7 @@ export default function NyttTilbudModal({
               <View style={styles.screen}>
                 <ScrollView
                   ref={scrollRef}
-                  keyboardShouldPersistTaps="handled"
+                  keyboardShouldPersistTaps="always"
                   keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                   showsVerticalScrollIndicator={false}
                   onLayout={e => {
@@ -1561,6 +1685,15 @@ export default function NyttTilbudModal({
                 >
                   <View style={styles.generatedMainCompact}>
                     {tilbudMetadataKort}
+
+                    <TouchableOpacity
+                      style={styles.materialSpesifiseringCta}
+                      onPress={() => setVisMaterialSpesifisering(true)}
+                      activeOpacity={0.84}
+                    >
+                      <Ionicons name="receipt-outline" size={16} color="#4ADE80" />
+                      <Text style={styles.materialSpesifiseringCtaText}>Spesifiser kostnader</Text>
+                    </TouchableOpacity>
 
                     <Animated.View
                       style={{
@@ -1610,16 +1743,11 @@ export default function NyttTilbudModal({
                             />
 
                             <View style={styles.previewCardBody}>
-                              <TouchableOpacity
-                                onPress={aktiverRedigering}
-                                activeOpacity={0.95}
-                              >
-                                <TilbudsForhåndsvisning
-                                  tekst={byggForhåndsvisningTekst()}
-                                  tone="dark"
-                                  documentVariant
-                                />
-                              </TouchableOpacity>
+                              <TilbudsForhåndsvisning
+                                tekst={byggForhåndsvisningTekst()}
+                                tone="dark"
+                                documentVariant
+                              />
                             </View>
                           </>
                         )}
@@ -1637,6 +1765,7 @@ export default function NyttTilbudModal({
                 </ScrollView>
 
                 <View
+                  pointerEvents="box-none"
                   style={[
                     styles.fixedFooter,
                     styles.fixedFooterPreview,
@@ -1723,7 +1852,27 @@ export default function NyttTilbudModal({
               </View>
             )}
           </View>
-          </TouchableWithoutFeedback>
+
+          <Modal
+            visible={visMaterialSpesifisering}
+            animationType="slide"
+            presentationStyle="pageSheet"
+            onRequestClose={() => setVisMaterialSpesifisering(false)}
+          >
+            <MaterialSpesifiseringScreen
+              valgtTjeneste={valgtTjeneste}
+              valgtMaterialkostnad={materiale}
+              rader={materialSpesifiseringRader}
+              materialprisErOppdatert={materialprisErOppdatertFraSpesifisering}
+              onClose={() => {
+                Keyboard.dismiss()
+                setVisMaterialSpesifisering(false)
+              }}
+              onApplyMaterialsum={brukSpesifisertMaterialsum}
+              onDeleteRow={slettMaterialrad}
+              onSaveRow={lagreMaterialrad}
+            />
+          </Modal>
 
           <Modal
             visible={visKundeSkjema}
@@ -2829,6 +2978,25 @@ const styles = StyleSheet.create({
     color: '#D1D6DE',
     flex: 1,
     textAlign: 'right',
+  },
+  materialSpesifiseringCta: {
+    marginTop: 14,
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.18)',
+    backgroundColor: 'rgba(27,29,35,0.88)',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  materialSpesifiseringCtaText: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 14,
+    lineHeight: 18,
+    color: '#D7FBE9',
   },
   redigerKnapp: {
     paddingVertical: 12,

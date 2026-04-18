@@ -80,7 +80,7 @@ function prøvParsePrisSeksjonEpost(
       totaltIdx = j
       break
     }
-    if (/^(Dette er inkludert|Dette er avtalt|Viktig å merke seg)\s*:/i.test(t)) {
+    if (/^(Dette er inkludert|Dette er avtalt|Praktiske hensyn|Viktig å merke seg)\s*:/i.test(t)) {
       return null
     }
     if (/^(Med vennlig hilsen|Vi hører|Dette prisoverslaget)/i.test(t)) {
@@ -234,7 +234,11 @@ function generertTekstTilVisningsHtml(generertTekst: string): string {
       continue
     }
 
-    if (/^(Dette er inkludert|Dette er avtalt|Viktig å merke seg):/.test(trimmed)) {
+    if (
+      /^(Dette er inkludert|Dette er avtalt|Praktiske hensyn|Viktig å merke seg)\s*:/i.test(
+        trimmed
+      )
+    ) {
       flushParagraph()
       out.push(
         `<p style="margin:20px 0 6px 0;font-size:14px;font-weight:600;color:#18181b;line-height:1.35;">${formatInlineMarkdownOgEscape(lineEnd)}</p>`
