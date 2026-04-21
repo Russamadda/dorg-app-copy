@@ -1863,7 +1863,7 @@ export default function NyttTilbudModal({
               valgtTjeneste={valgtTjeneste}
               valgtMaterialkostnad={materiale}
               rader={materialSpesifiseringRader}
-              materialprisErOppdatert={materialprisErOppdatertFraSpesifisering}
+              tilbudstekstHarMaterialoversikt={brukMaterialerITilbudstekst}
               onClose={() => {
                 Keyboard.dismiss()
                 setVisMaterialSpesifisering(false)

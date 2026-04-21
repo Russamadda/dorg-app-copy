@@ -572,12 +572,28 @@ export default function TilbudScreen() {
           const gammelRad = payload.old as { status?: string } | null
           const nyStatus = nyRad?.status
 
+          const tilbudId = nyRad?.id
+
+          if (nyStatus === 'utfort' && tilbudId) {
+            setTilbud(prev =>
+              prev.map(item =>
+                item.id === tilbudId
+                  ? { ...item, status: 'utfort' as Forespørsel['status'] }
+                  : item
+              )
+            )
+            setValgtTilbud(prev =>
+              prev?.id === tilbudId
+                ? { ...prev, status: 'utfort' as Forespørsel['status'] }
+                : prev
+            )
+            return
+          }
+
           if (
             (nyStatus === 'godkjent' || nyStatus === 'justering') &&
             gammelRad?.status !== nyStatus
           ) {
-            const tilbudId = nyRad?.id
-
             if (!tilbudId || !tilbudRef.current.some(item => item.id === tilbudId)) {
               void hentTilbud()
               return

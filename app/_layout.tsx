@@ -283,6 +283,7 @@ export default function RootLayout() {
           options={{
             animation: 'slide_from_bottom',
             animationTypeForReplace: 'push',
+            contentStyle: { backgroundColor: BRAND_BACKGROUND_BASE_COLOR },
           }}
         />
         <Stack.Screen name="bedrift" options={{ animation: 'slide_from_right' }} />

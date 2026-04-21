@@ -492,7 +492,7 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
     }
 
     return (
-      <View style={[styles.stepLayer, styles.stepLayerCentered]}>
+      <View style={[styles.stepLayer, styles.stepLayerStep4]}>
         <View style={[styles.cardStack, styles.cardStackNarrow]}>
           <View style={styles.completeHeroAbove}>
             <View style={styles.completeIconLarge}>
@@ -615,10 +615,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     paddingHorizontal: 20,
   },
-  /** Vertikal sentrering av kort i steg 2–4 (tjenester, pris, oppsummering). */
+  /** Vertikal sentrering av kort i steg 2–3 (tjenester, pris). */
   stepLayerCentered: {
     justifyContent: 'center',
     paddingVertical: 6,
+  },
+  /** Steg 4 (oppsummering): forankret fra topp så kortet bare vokser nedover. */
+  stepLayerStep4: {
+    justifyContent: 'flex-start',
+    paddingTop: 16,
   },
   /** Løfter «Velg tjenester»-tittel + kort litt opp; for stor negativ verdi skjuler tittelen under hero. */
   stepTjenesterLift: {
@@ -883,8 +888,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'stretch',
     marginBottom: 14,
-    /** Løfter checkmark + «Alt er klart!» tydelig opp mot hero/progress. */
-    marginTop: -108,
   },
   completeIconLarge: {
     width: 84,

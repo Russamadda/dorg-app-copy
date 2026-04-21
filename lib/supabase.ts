@@ -867,20 +867,6 @@ export async function hentSendteTilbud(firmaId: string): Promise<Forespørsel[]>
   return (data as TilbudRad[]).map(fraForespørselRad)
 }
 
-export async function oppdaterTilbudStatus(
-  id: string,
-  status: TilbudStatus
-): Promise<void> {
-  const update: Record<string, unknown> = { status }
-  const valgfrieKolonner: string[] = []
-
-  if (status === 'godkjent' || status === 'justering') {
-    update.sett_som_lest = false
-    valgfrieKolonner.push('sett_som_lest')
-  }
-
-  await oppdaterTilbudRadMedFallback(id, update, valgfrieKolonner)
-}
 
 export async function markerSomLest(tilbudId: string): Promise<void> {
   await oppdaterTilbudRadMedFallback(
@@ -942,7 +928,7 @@ export async function oppdaterFirma(userId: string, data: Partial<Firma>): Promi
 export async function opprettFirma(userId: string, firmanavn: string): Promise<void> {
   const { error } = await supabase
     .from('firma')
-    .insert({ user_id: userId, firmanavn })
+    .upsert({ user_id: userId, firmanavn }, { onConflict: 'user_id', ignoreDuplicates: true })
 
   if (error) throw new Error(error.message)
 }

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   View,
   Text,
-  TextInput,
   Modal,
   ScrollView,
   TouchableOpacity,
@@ -13,7 +12,6 @@ import {
   Alert,
   Animated,
   Easing,
-  Platform,
   InteractionManager,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -39,6 +37,7 @@ import { hentAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
 import { getCachedTilbudHendelser, setCachedTilbudHendelser } from '../lib/tilbudHendelserCache'
 import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import MaterialSpesifiseringScreen from './MaterialSpesifiseringScreen'
+import { OppdaterGrunnlag } from './OppdaterGrunnlag'
 import {
   composeOfferTextWithMaterialOverview,
   fjernMaterialoversiktFraTilbudTekst,
@@ -243,23 +242,43 @@ function hentMaterialSpesifiseringFraHendelser(
   return []
 }
 
-function parseTimerFraTekst(raw: string, fallback: number): number {
-  const n = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'))
-  if (!Number.isFinite(n) || n < 0) return fallback
-  return n
+function parseManuellMaterialkostnadFraMetadata(metadata: Record<string, unknown> | undefined) {
+  if (!metadata) return null
+
+  const kandidater = [metadata.manuellMaterialkostnad, metadata.manualMaterialEstimate]
+
+  for (const kandidat of kandidater) {
+    if (typeof kandidat === 'number' && Number.isFinite(kandidat)) {
+      return Math.max(0, Math.round(kandidat))
+    }
+
+    if (typeof kandidat === 'string') {
+      const parsed = Number(kandidat)
+      if (Number.isFinite(parsed)) {
+        return Math.max(0, Math.round(parsed))
+      }
+    }
+  }
+
+  return null
 }
 
-function parseMaterialFraTekst(raw: string, fallback: number): number {
-  const cleaned = String(raw).replace(/\s/g, '').replace(/[^\d]/g, '')
-  const n = parseInt(cleaned, 10)
-  if (!Number.isFinite(n) || n < 0) return fallback
-  return n
-}
+function hentManuellMaterialkostnadFraHendelser(
+  hendelser: TilbudHendelse[] | null | undefined
+): number | null {
+  if (!hendelser?.length) return null
 
-function formaterMaterialTekst(raw: string | number) {
-  const digits = String(raw).replace(/[^\d]/g, '')
-  if (!digits) return ''
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  for (let index = hendelser.length - 1; index >= 0; index -= 1) {
+    const hendelse = hendelser[index]
+    if (hendelse.hendelseType !== 'tilbud_sendt' && hendelse.hendelseType !== 'nytt_tilbud_sendt') {
+      continue
+    }
+
+    const manueltBelop = parseManuellMaterialkostnadFraMetadata(hendelse.metadata)
+    if (manueltBelop !== null) return manueltBelop
+  }
+
+  return null
 }
 
 function hentVersjonFraHendelse(hendelse: TilbudHendelse) {
@@ -569,8 +588,13 @@ export default function TilbudDetaljerModal({
   const forrigeViserOppdatertRef = useRef(false)
   const [firma, setFirma] = useState<Firma | null>(null)
   const [hendelser, setHendelser] = useState<TilbudHendelse[] | null>(null)
-  const [timerTekst, setTimerTekst] = useState(String(tilbud?.timer ?? 8))
-  const [materialTekst, setMaterialTekst] = useState(formaterMaterialTekst(tilbud?.materialkostnad ?? 0))
+  const [valgtTimer, setValgtTimer] = useState(tilbud?.timer ?? 8)
+  const [manuellMaterialkostnad, setManuellMaterialkostnad] = useState(() => {
+    const lagretManuellMaterialkostnad = hentManuellMaterialkostnadFraHendelser(
+      tilbud ? getCachedTilbudHendelser(tilbud.id) : null
+    )
+    return lagretManuellMaterialkostnad ?? tilbud?.materialkostnad ?? 0
+  })
   const [bekreftet, setBekreftet] = useState(false)
   const [viserOppdatertPris, setViserOppdatertPris] = useState(false)
   const [oppdatertTekst, setOppdatertTekst] = useState('')
@@ -578,10 +602,19 @@ export default function TilbudDetaljerModal({
   const [materialSpesifiseringRader, setMaterialSpesifiseringRader] = useState<MaterialSpesifiseringRad[]>([])
   const [brukMaterialerITilbudstekst, setBrukMaterialerITilbudstekst] = useState(false)
   const [harMaterialoversiktFraOriginalTekst, setHarMaterialoversiktFraOriginalTekst] = useState(false)
+  const [specPrisErBekrefteted, setSpecPrisErBekrefteted] = useState(false)
+  const [originalMaterialkostnadFørSpec, setOriginalMaterialkostnadFørSpec] = useState<number | null>(null)
   const [sender, setSender] = useState(false)
+  const [markererUtfort, setMarkererUtfort] = useState(false)
+  const [avviserJustering, setAvviserJustering] = useState(false)
   const [justeringFase, setJusteringFase] = useState<'klar' | 'genererer' | 'klar_til_sending'>('klar')
   const [senderPaminnelse, setSenderPaminnelse] = useState(false)
   const [autoPaminnelserEnabled, setAutoPaminnelserEnabledState] = useState(false)
+  const spesifisertMaterialsum = summerMaterialSpesifisering(materialSpesifiseringRader)
+  const harAktivMaterialspesifisering = harBrukbareMaterialrader(materialSpesifiseringRader)
+  const aktivMaterialkostnad = (harAktivMaterialspesifisering && specPrisErBekrefteted)
+    ? spesifisertMaterialsum
+    : manuellMaterialkostnad
 
   useEffect(() => {
     if (!visible) return
@@ -611,6 +644,13 @@ export default function TilbudDetaljerModal({
             if (current.length > 0) return current
             return hentMaterialSpesifiseringFraHendelser(hendelserData)
           })
+          const lagretManuellMaterialkostnad =
+            hentManuellMaterialkostnadFraHendelser(hendelserData)
+          if (lagretManuellMaterialkostnad !== null) {
+            setManuellMaterialkostnad(current =>
+              current === (tilbud?.materialkostnad ?? 0) ? lagretManuellMaterialkostnad : current
+            )
+          }
           if (tilbud) {
             setCachedTilbudHendelser(tilbud.id, hendelserData)
           }
@@ -642,8 +682,10 @@ export default function TilbudDetaljerModal({
   useEffect(() => {
     if (tilbud) {
       const cachedeHendelser = getCachedTilbudHendelser(tilbud.id) ?? null
-      setTimerTekst(String(tilbud.timer ?? 8))
-      setMaterialTekst(formaterMaterialTekst(tilbud.materialkostnad ?? 0))
+      const lagretManuellMaterialkostnad =
+        hentManuellMaterialkostnadFraHendelser(cachedeHendelser)
+      setValgtTimer(tilbud.timer ?? 8)
+      setManuellMaterialkostnad(lagretManuellMaterialkostnad ?? tilbud.materialkostnad ?? 0)
       setBekreftet(false)
       setViserOppdatertPris(false)
       setOppdatertTekst('')
@@ -652,6 +694,8 @@ export default function TilbudDetaljerModal({
       const harMaterialoversikt = /^Materialoversikt:\s*$/m.test(tilbud.generertTekst ?? '')
       setHarMaterialoversiktFraOriginalTekst(harMaterialoversikt)
       setBrukMaterialerITilbudstekst(harMaterialoversikt)
+      setSpecPrisErBekrefteted(false)
+      setOriginalMaterialkostnadFørSpec(null)
       setSender(false)
       setSenderPaminnelse(false)
       setHendelser(cachedeHendelser)
@@ -669,22 +713,16 @@ export default function TilbudDetaljerModal({
     if (!tilbud) return false
     const ot = tilbud.timer ?? 8
     const om = tilbud.materialkostnad ?? 0
-    const t = parseTimerFraTekst(timerTekst, ot)
-    const m = parseMaterialFraTekst(materialTekst, om)
-    return t !== ot || m !== om
-  }, [tilbud?.id, tilbud?.timer, tilbud?.materialkostnad, timerTekst, materialTekst])
+    return valgtTimer !== ot || aktivMaterialkostnad !== om
+  }, [aktivMaterialkostnad, tilbud?.id, tilbud?.timer, tilbud?.materialkostnad, valgtTimer])
 
   useEffect(() => {
     if (!tilbud || !firma) return
-    const ot = tilbud.timer ?? 8
-    const om = tilbud.materialkostnad ?? 0
     const fTp = firma.timepris ?? 950
     const fPs = firma.materialPaslag ?? 15
-    const t = parseTimerFraTekst(timerTekst, ot)
-    const m = parseMaterialFraTekst(materialTekst, om)
     const total = beregnTilbudPrisLinjer({
-      timer: t,
-      materialkostnad: m,
+      timer: valgtTimer,
+      materialkostnad: aktivMaterialkostnad,
       timepris: fTp,
       materialPaslag: fPs,
     }).totalInklMva
@@ -711,7 +749,7 @@ export default function TilbudDetaljerModal({
         useNativeDriver: true,
       }),
     ]).start()
-  }, [tilbud?.id, timerTekst, materialTekst, firma?.id, firma?.timepris, firma?.materialPaslag])
+  }, [tilbud?.id, valgtTimer, aktivMaterialkostnad, firma?.id, firma?.timepris, firma?.materialPaslag])
 
   useEffect(() => {
     if (!visible) {
@@ -826,6 +864,8 @@ export default function TilbudDetaljerModal({
   const visPrisjusteringKort = !erGodkjentTilbud && !erUtfortTilbud && !erAvslattTilbud
   const originalTimer = aktivtTilbud.timer ?? 8
   const originalMaterialkostnad = aktivtTilbud.materialkostnad ?? 0
+  const originalManuellMaterialkostnad =
+    hentManuellMaterialkostnadFraHendelser(hendelserForVisning) ?? originalMaterialkostnad
   const sisteSendtDato =
     aktivtTilbud.sistSendtDato ??
     aktivtTilbud.sendtDato ??
@@ -834,19 +874,10 @@ export default function TilbudDetaljerModal({
   const dagerSidenSistSendt = dagerSiden(sisteSendtDato) ?? 0
   const antallPaminnelser = aktivtTilbud.antallPaminnelser ?? 0
 
-  const spesifisertMaterialsum = summerMaterialSpesifisering(materialSpesifiseringRader)
-  const harLagretMaterialspesifisering = materialSpesifiseringRader.length > 0
-  const harMaterialspesifisering = harLagretMaterialspesifisering || harMaterialoversiktFraOriginalTekst
-  const kanOppdatereMaterialprisFraSpesifisering = harBrukbareMaterialrader(materialSpesifiseringRader)
-
   const timepris = firma?.timepris ?? 950
   const matPaslag = firma?.materialPaslag ?? 15
-  const timer = parseTimerFraTekst(timerTekst, originalTimer)
-  const materialkostnad = harLagretMaterialspesifisering
-    ? spesifisertMaterialsum
-    : harMaterialspesifisering
-      ? originalMaterialkostnad
-      : parseMaterialFraTekst(materialTekst, originalMaterialkostnad)
+  const timer = valgtTimer
+  const materialkostnad = aktivMaterialkostnad
   const prisLinjer = beregnTilbudPrisLinjer({
     timer,
     materialkostnad,
@@ -859,7 +890,7 @@ export default function TilbudDetaljerModal({
   const arbeidInklMva = prisLinjer.arbeidInklMva
   const grunntekst = fjernKortLinje(aktivtTilbud.generertTekst ?? '')
   const prisjustertGrunntekst = oppdaterPrisITekst(
-    harLagretMaterialspesifisering
+    harAktivMaterialspesifisering
       ? fjernMaterialoversiktFraTilbudTekst(grunntekst)
       : grunntekst,
     materialerInklMva,
@@ -873,14 +904,16 @@ export default function TilbudDetaljerModal({
   const visningsTekst = viserOppdatertPris
     ? erJusteringsTilbud
       ? (oppdatertTekst || grunntekst)
-      : harLagretMaterialspesifisering
+      : harAktivMaterialspesifisering
         ? (brukMaterialerITilbudstekst
             ? composeOfferTextWithMaterialOverview(prisjustertGrunntekst, materialSpesifiseringRader)
             : prisjustertGrunntekst)
         : prisjustertGrunntekst
     : grunntekst
 
-  const kanBekrefte = erJusteringsTilbud ? true : harPrisEndring
+  const kanBekrefte = erJusteringsTilbud
+    ? true
+    : harPrisEndring || (harAktivMaterialspesifisering && !specPrisErBekrefteted)
 
   const kanSendePaminnelse =
     !erGodkjentTilbud &&
@@ -956,6 +989,7 @@ export default function TilbudDetaljerModal({
         opprettetDato: sendtDato,
         versjon: aktivtTilbud.versjon ?? 1,
         metadata: {
+          manuellMaterialkostnad,
           materialSpesifiseringRader: serialiserMaterialSpesifiseringRader(materialSpesifiseringRader),
         },
       })
@@ -970,7 +1004,7 @@ export default function TilbudDetaljerModal({
   }
 
   function avvisJustering() {
-    if (!erJusteringsTilbud) return
+    if (!erJusteringsTilbud || avviserJustering) return
 
     Alert.alert(
       'Avvis justering?',
@@ -981,6 +1015,7 @@ export default function TilbudDetaljerModal({
           text: 'Avvis',
           style: 'destructive',
           onPress: async () => {
+            setAvviserJustering(true)
             try {
               await oppdaterTilbudSnapshotUtenHendelse(aktivtTilbud.id, {
                 status: 'sendt',
@@ -993,6 +1028,8 @@ export default function TilbudDetaljerModal({
               onClose()
             } catch (error) {
               console.error('Feil ved avvisning av justering:', error)
+            } finally {
+              setAvviserJustering(false)
             }
           },
         },
@@ -1048,7 +1085,8 @@ export default function TilbudDetaljerModal({
   }
 
   const markerSomUtfort = async () => {
-    if (!firma || !erGodkjentTilbud) return
+    if (!firma || !erGodkjentTilbud || markererUtfort) return
+    setMarkererUtfort(true)
     try {
       const opprettetDato = new Date().toISOString()
       await registrerTilbudUtfort({
@@ -1061,6 +1099,8 @@ export default function TilbudDetaljerModal({
       onClose()
     } catch (error) {
       console.error('Feil ved markering som utført:', error)
+    } finally {
+      setMarkererUtfort(false)
     }
   }
 
@@ -1147,7 +1187,10 @@ export default function TilbudDetaljerModal({
    * ellers ville timer/material i DB skille seg fra total i generertTekst — tilbudskortet leser total fra teksten først.
    */
   function bekreftPrisendring() {
-    if (!harPrisEndring) return
+    if (!harPrisEndring && !(harAktivMaterialspesifisering && !specPrisErBekrefteted)) return
+    if (harAktivMaterialspesifisering && !specPrisErBekrefteted) {
+      setSpecPrisErBekrefteted(true)
+    }
     setBekreftet(true)
     setViserOppdatertPris(true)
   }
@@ -1164,13 +1207,43 @@ export default function TilbudDetaljerModal({
   }
 
   function brukSpesifisertMaterialsumIPrisen(brukITilbudstekst: boolean) {
-    if (!kanOppdatereMaterialprisFraSpesifisering) return
+    if (!harAktivMaterialspesifisering) return
+    if (originalMaterialkostnadFørSpec === null) {
+      setOriginalMaterialkostnadFørSpec(manuellMaterialkostnad)
+    }
     setBrukMaterialerITilbudstekst(brukITilbudstekst)
     setHarMaterialoversiktFraOriginalTekst(true)
-    setMaterialTekst(formaterMaterialTekst(spesifisertMaterialsum))
     setVisMaterialSpesifisering(false)
     nullstillEtterPrisRedigering()
   }
+
+  function handleTimerChange(value: number) {
+    if (value === valgtTimer) return
+    setValgtTimer(value)
+    nullstillEtterPrisRedigering()
+  }
+
+  function handleMaterialChange(value: number) {
+    if (harAktivMaterialspesifisering) return
+    if (value === manuellMaterialkostnad) return
+    setManuellMaterialkostnad(value)
+    if (value !== spesifisertMaterialsum && brukMaterialerITilbudstekst) {
+      setBrukMaterialerITilbudstekst(false)
+    }
+    nullstillEtterPrisRedigering()
+  }
+
+  const tilbudStatus = aktivtTilbud.status.toLowerCase()
+  const headerStatusTitle =
+    tilbudStatus === 'justering'
+      ? 'Justering'
+      : tilbudStatus === 'godkjent'
+        ? 'Godkjent'
+        : tilbudStatus === 'sendt' ||
+            tilbudStatus === 'paminnelse_sendt' ||
+            tilbudStatus === 'siste_paminnelse_sendt'
+          ? 'Sendt'
+          : presentasjon.currentStatus
 
   return (
     <Modal
@@ -1182,7 +1255,7 @@ export default function TilbudDetaljerModal({
     >
       <SafeAreaView style={styles.container} edges={['top']}>
         <OfferStatusHeader
-          currentStatus="Sendt"
+          currentStatus={headerStatusTitle}
           currentStatusColor={presentasjon.currentStatusColor}
           onClose={onClose}
         />
@@ -1282,59 +1355,55 @@ export default function TilbudDetaljerModal({
                     .
                   </Text>
                   <View style={styles.prisJusteringSkillelinje} />
-                  <View style={styles.prisGrunnlagFeltBlokk}>
-                    <View style={styles.prisGrunnlagFeltKort}>
-                      <Text style={styles.prisGrunnlagFeltTittel}>Timer</Text>
-                      <TextInput
-                        style={styles.prisGrunnlagInputTimer}
-                        value={timerTekst}
-                        onChangeText={v => {
-                          setTimerTekst(v)
-                          nullstillEtterPrisRedigering()
-                        }}
-                        keyboardType="decimal-pad"
-                        selectTextOnFocus
-                        placeholder="0"
-                        placeholderTextColor="rgba(255,255,255,0.35)"
-                        {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                      />
-                    </View>
-                    <View style={styles.prisGrunnlagFeltKort}>
-                      <Text style={styles.prisGrunnlagFeltTittel}>Material eks.mva</Text>
-                      {harMaterialspesifisering ? (
-                        <View style={styles.prisGrunnlagMaterialStatic}>
-                          <Text style={styles.prisGrunnlagMaterialStaticTekst}>
-                            {materialkostnad.toLocaleString('nb-NO')} kr
+                  <OppdaterGrunnlag
+                    timer={timer}
+                    material={materialkostnad}
+                    timepris={timepris}
+                    materialPaslag={matPaslag}
+                    harAktivMaterialspesifisering={harAktivMaterialspesifisering}
+                    onTimerChange={handleTimerChange}
+                    onMaterialChange={handleMaterialChange}
+                  />
+                  {harAktivMaterialspesifisering ? (
+                    <TouchableOpacity
+                      style={styles.materialSpesifiseringInfoRad}
+                      onPress={() => setVisMaterialSpesifisering(true)}
+                      activeOpacity={0.86}
+                    >
+                      <View style={styles.materialSpesifiseringInfoCopy}>
+                        <View style={styles.materialSpesifiseringInfoBadge}>
+                          <Ionicons
+                            name="information-circle-outline"
+                            size={16}
+                            color="rgba(255,255,255,0.72)"
+                          />
+                        </View>
+                        <View style={styles.materialSpesifiseringInfoTextWrap}>
+                          <Text style={styles.materialSpesifiseringInfoTitle}>
+                            Materialprisen styres av spesifikasjonen
                           </Text>
                         </View>
-                      ) : (
-                        <TextInput
-                          style={styles.prisGrunnlagInputMaterial}
-                          value={materialTekst}
-                          onChangeText={v => {
-                            setMaterialTekst(formaterMaterialTekst(v))
-                            nullstillEtterPrisRedigering()
-                          }}
-                          keyboardType="number-pad"
-                          selectTextOnFocus
-                          placeholder="0"
-                          placeholderTextColor="rgba(255,255,255,0.35)"
-                          {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
-                        />
-                      )}
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={[styles.materialSpesifiseringCta, styles.materialSpesifiseringCtaFullWidth]}
-                    onPress={() => setVisMaterialSpesifisering(true)}
-                    activeOpacity={0.86}
-                  >
-                    <Text style={styles.materialSpesifiseringCtaTekst}>
-                      {harMaterialspesifisering
-                        ? 'Juster materialspesifikasjon'
-                        : 'Legg til materialspesifikasjon'}
-                    </Text>
-                  </TouchableOpacity>
+                      </View>
+                      <Text style={styles.materialSpesifiseringInfoAction}>Åpne</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={[
+                          styles.materialSpesifiseringGhostCta,
+                          styles.materialSpesifiseringCtaFullWidth,
+                        ]}
+                        onPress={() => setVisMaterialSpesifisering(true)}
+                        activeOpacity={0.86}
+                      >
+                        <Text style={styles.materialSpesifiseringGhostCtaTekst}>
+                          Legg til materialspesifikasjon
+                        </Text>
+                        <Ionicons name="add-circle-outline" size={20} color="rgba(140,195,160,0.75)" />
+                      </TouchableOpacity>
+                      <View style={styles.prisInlineSecondaryDivider} />
+                    </>
+                  )}
                   <View style={styles.prisInlineActionRad}>
                         {erJusteringsTilbud ? (
                           <TouchableOpacity
@@ -1451,9 +1520,35 @@ export default function TilbudDetaljerModal({
                         )}
                         <TouchableOpacity
                           onPress={() => {
-                            setTimerTekst(String(originalTimer))
-                            setMaterialTekst(formaterMaterialTekst(originalMaterialkostnad))
-                            nullstillEtterPrisRedigering()
+                            if (harAktivMaterialspesifisering) {
+                              Alert.alert(
+                                'Tilbakestill materialpris?',
+                                'Dette vil slette materialspesifikasjonen og tilbakestille prisen til opprinnelig estimat.',
+                                [
+                                  { text: 'Avbryt', style: 'cancel' },
+                                  {
+                                    text: 'Tilbakestill',
+                                    style: 'destructive',
+                                    onPress: () => {
+                                      setMaterialSpesifiseringRader([])
+                                      setManuellMaterialkostnad(
+                                        originalMaterialkostnadFørSpec ?? originalManuellMaterialkostnad
+                                      )
+                                      setOriginalMaterialkostnadFørSpec(null)
+                                      setSpecPrisErBekrefteted(false)
+                                      setBrukMaterialerITilbudstekst(harMaterialoversiktFraOriginalTekst)
+                                      setValgtTimer(originalTimer)
+                                      nullstillEtterPrisRedigering()
+                                    },
+                                  },
+                                ]
+                              )
+                            } else {
+                              setValgtTimer(originalTimer)
+                              setManuellMaterialkostnad(originalManuellMaterialkostnad)
+                              setBrukMaterialerITilbudstekst(harMaterialoversiktFraOriginalTekst)
+                              nullstillEtterPrisRedigering()
+                            }
                           }}
                           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                           style={styles.prisInlineResetKnapp}
@@ -1516,7 +1611,7 @@ export default function TilbudDetaljerModal({
               <TouchableOpacity
                 onPress={() => void markerSomUtfort()}
                 activeOpacity={0.92}
-                disabled={!firma}
+                disabled={!firma || markererUtfort}
                 style={styles.primaryCtaFullWidth}
               >
                 <LinearGradient
@@ -1563,9 +1658,9 @@ export default function TilbudDetaljerModal({
         >
           <MaterialSpesifiseringScreen
             valgtTjeneste={aktivtTilbud.kortBeskrivelse || aktivtTilbud.jobbType || 'Tilbud'}
-            valgtMaterialkostnad={materialkostnad}
+            valgtMaterialkostnad={manuellMaterialkostnad}
             rader={materialSpesifiseringRader}
-            materialprisErOppdatert={kanOppdatereMaterialprisFraSpesifisering}
+            tilbudstekstHarMaterialoversikt={harMaterialoversiktFraOriginalTekst || brukMaterialerITilbudstekst}
             onClose={() => {
               Keyboard.dismiss()
               setVisMaterialSpesifisering(false)
@@ -2551,7 +2646,7 @@ const styles = StyleSheet.create({
   },
   kundeMeldingInline: {
     borderLeftWidth: 3,
-    borderLeftColor: 'rgba(0, 255, 150, 0.42)',
+    borderLeftColor: '#6FA4FF',
     paddingLeft: 12,
     paddingVertical: 2,
   },
@@ -2608,98 +2703,85 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
     marginBottom: 12,
   },
-  prisGrunnlagFeltBlokk: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    gap: 24,
-    marginBottom: 18,
-  },
-  prisGrunnlagFeltKort: {
-    flexGrow: 0,
-    flexShrink: 0,
-    alignItems: 'center',
-  },
-  prisGrunnlagFeltTittel: {
-    marginBottom: 6,
-    fontSize: 15,
-    lineHeight: 19,
-    fontFamily: 'DMSans_500Medium',
-    color: '#C3CBD7',
-    textAlign: 'center',
-  },
-  prisGrunnlagInputTimer: {
-    height: 46,
-    width: 72,
-    minWidth: 72,
-    maxWidth: 72,
-    backgroundColor: 'rgba(0,0,0,0.22)',
-    borderRadius: 11,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,255,150,0.12)',
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 20,
-    lineHeight: 24,
-    color: '#D1D6DE',
-    textAlign: 'center',
-  },
-  prisGrunnlagInputMaterial: {
-    height: 46,
-    width: 122,
-    minWidth: 122,
-    maxWidth: 122,
-    backgroundColor: 'rgba(0,0,0,0.22)',
-    borderRadius: 11,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,255,150,0.12)',
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 20,
-    lineHeight: 24,
-    color: '#D1D6DE',
-    textAlign: 'center',
-  },
-  prisGrunnlagMaterialStatic: {
-    height: 46,
-    width: 122,
-    minWidth: 122,
-    maxWidth: 122,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 11,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  prisGrunnlagMaterialStaticTekst: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 18,
-    lineHeight: 22,
-    color: '#E5E7EB',
-    textAlign: 'center',
-  },
-  materialSpesifiseringCta: {
-    marginBottom: 10,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(74,222,128,0.42)',
-    backgroundColor: 'rgba(74,222,128,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
   materialSpesifiseringCtaFullWidth: {
     width: '100%',
   },
-  materialSpesifiseringCtaTekst: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 14,
-    lineHeight: 18,
-    color: '#E6FBEF',
+  materialSpesifiseringGhostCta: {
+    marginBottom: 10,
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(120,180,140,0.45)',
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  materialSpesifiseringGhostCtaTekst: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 16,
+    lineHeight: 20,
+    color: 'rgba(140,195,160,0.75)',
     textAlign: 'center',
+  },
+  materialSpesifiseringInfoRad: {
+    marginBottom: 10,
+    minHeight: 56,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  materialSpesifiseringInfoCopy: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  materialSpesifiseringInfoBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  materialSpesifiseringInfoTextWrap: {
+    flex: 1,
+    gap: 3,
+  },
+  materialSpesifiseringInfoTitle: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 13,
+    lineHeight: 17,
+    color: 'rgba(255,255,255,0.9)',
+  },
+  materialSpesifiseringInfoBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    lineHeight: 17,
+    color: 'rgba(255,255,255,0.46)',
+  },
+  materialSpesifiseringInfoAction: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    lineHeight: 16,
+    color: 'rgba(0,255,150,0.82)',
+  },
+  prisInlineSecondaryDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 12,
   },
   prisInlineActionRad: {
     flexDirection: 'row',

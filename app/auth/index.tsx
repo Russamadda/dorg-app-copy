@@ -464,7 +464,7 @@ export default function AuthEntryScreen() {
           authCard={authCard}
           forgotCard={forgotCard}
           fallbackHeight={AUTH_STAGE_HEIGHT}
-          keyboardLift={panel === 'auth' && mode === 'register' ? 118 : 52}
+          keyboardLift={panel === 'auth' && mode === 'register' ? 140 : 85}
           style={styles.stage}
         />
       </View>
