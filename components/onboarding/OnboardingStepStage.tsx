@@ -14,6 +14,7 @@ type Direction = 1 | -1
 type Props<Step extends string | number> = {
   step: Step
   direction: Direction
+  animateStepChange: boolean
   renderStep: (step: Step) => ReactNode
 }
 
@@ -23,29 +24,34 @@ const STEP_EASING = Easing.out(Easing.cubic)
 export default function OnboardingStepStage<Step extends string | number>({
   step,
   direction,
+  animateStepChange,
   renderStep,
 }: Props<Step>) {
-  const entering = direction > 0
-    ? SlideInRight
-      .withInitialValues({ opacity: 0.98 })
-      .duration(STEP_DURATION_MS)
-      .easing(STEP_EASING)
-      .reduceMotion(ReduceMotion.System)
-    : SlideInLeft
-      .withInitialValues({ opacity: 0.98 })
-      .duration(STEP_DURATION_MS)
-      .easing(STEP_EASING)
-      .reduceMotion(ReduceMotion.System)
+  const entering = animateStepChange
+    ? direction > 0
+      ? SlideInRight
+        .withInitialValues({ opacity: 0.98 })
+        .duration(STEP_DURATION_MS)
+        .easing(STEP_EASING)
+        .reduceMotion(ReduceMotion.System)
+      : SlideInLeft
+        .withInitialValues({ opacity: 0.98 })
+        .duration(STEP_DURATION_MS)
+        .easing(STEP_EASING)
+        .reduceMotion(ReduceMotion.System)
+    : undefined
 
-  const exiting = direction > 0
-    ? SlideOutLeft
-      .duration(STEP_DURATION_MS)
-      .easing(STEP_EASING)
-      .reduceMotion(ReduceMotion.System)
-    : SlideOutRight
-      .duration(STEP_DURATION_MS)
-      .easing(STEP_EASING)
-      .reduceMotion(ReduceMotion.System)
+  const exiting = animateStepChange
+    ? direction > 0
+      ? SlideOutLeft
+        .duration(STEP_DURATION_MS)
+        .easing(STEP_EASING)
+        .reduceMotion(ReduceMotion.System)
+      : SlideOutRight
+        .duration(STEP_DURATION_MS)
+        .easing(STEP_EASING)
+        .reduceMotion(ReduceMotion.System)
+    : undefined
 
   return (
     <View style={styles.viewport}>

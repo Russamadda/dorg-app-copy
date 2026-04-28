@@ -1,7 +1,7 @@
 import { tilbudTekstMedKundenavn } from './tilbudKundePlassholder'
 
 /** Må samsvare med det modellen bruker i utkast (se openai system/brukermelding). */
-export const STANDARD_OPPSTART_SETNING = 'Vi tar kontakt for å avtale oppstartsdato.'
+export const STANDARD_OPPSTART_SETNING = 'Vi tar kontakt for avtale oppstart.'
 
 const META_SEP = '\n---\n'
 
@@ -68,11 +68,20 @@ function erOppstartLinje(linje: string): boolean {
   const t = linje.trim()
   if (!t) return false
   if (/^Vi foreslår oppstart\b/i.test(t)) return true
+  if (/^Vi tar kontakt for avtale oppstart\.?$/i.test(t)) return true
   if (/^Vi tar kontakt for å avtale oppstartsdato\.?$/i.test(t)) return true
+  if (/^Vi tar kontakt for å avtale tidspunkt som passer for begge\.?$/i.test(t)) return true
   if (/^Vi kontakter deg for å avtale oppstart\.?$/i.test(t)) return true
   const std = STANDARD_OPPSTART_SETNING
   if (t === std || t === std.replace(/\.$/, '')) return true
   return false
+}
+
+function byggOppstartMaalLinje(foreslattOppstartTekst?: string): string {
+  const harDato = Boolean(foreslattOppstartTekst?.trim())
+  return harDato
+    ? `Vi foreslår oppstart ${foreslattOppstartTekst!.trim()}.`
+    : STANDARD_OPPSTART_SETNING
 }
 
 /**
@@ -83,11 +92,8 @@ function erOppstartLinje(linje: string): boolean {
 function erstattOppstartSetninger(
   kropp: string,
   foreslattOppstartTekst?: string
-): string {
-  const harDato = Boolean(foreslattOppstartTekst?.trim())
-  const målLinje = harDato
-    ? `Vi foreslår oppstart ${foreslattOppstartTekst!.trim()}.`
-    : STANDARD_OPPSTART_SETNING
+): { tekst: string; fantOppstartslinje: boolean } {
+  const målLinje = byggOppstartMaalLinje(foreslattOppstartTekst)
 
   const linjer = kropp.split(/\r?\n/)
   let sattInn = false
@@ -105,16 +111,16 @@ function erstattOppstartSetninger(
   }
 
   if (!sattInn) {
-    return `${målLinje}\n\n${kropp.replace(/^\s+/, '')}`
+    return { tekst: kropp, fantOppstartslinje: false }
   }
 
-  return ut.join('\n')
+  return { tekst: ut.join('\n'), fantOppstartslinje: true }
 }
 
 /**
  * Oppdaterer meta (Til:-linje), bevarer modellens introduksjon mellom `---` og arbeidslisten («Dette er avtalt:» / «Dette er inkludert:»).
  * Ved kontaktfinalisering endres kun: `Til:`-linje, «Hei Kunde» → ekte fornavn, og oppstartssetning
- * i brødteksten (etter arbeidslisten) når dato er valgt. Ingen ekstra takk-/prisoverslag-linjer.
+ * der den allerede finnes i brødteksten. Hvis den mangler helt, legges den inn før arbeidslisten.
  */
 export function finaliserTilbudTekstSync(input: {
   tilbudTekst: string
@@ -142,10 +148,20 @@ export function finaliserTilbudTekstSync(input: {
   const introRaw = body.slice(0, deling.introSliceEnd).trim()
   const tail = body.slice(deling.tailSliceStart).trimStart()
   const nyIntro = introRaw ? tilbudTekstMedKundenavn(introRaw, navn) : ''
-  const tailMedOppstart = erstattOppstartSetninger(tail, input.foreslattOppstartTekst)
+  const introMedOppstart = erstattOppstartSetninger(nyIntro, input.foreslattOppstartTekst)
+  const tailMedOppstartResultat = introMedOppstart.fantOppstartslinje
+    ? { tekst: tail, fantOppstartslinje: false }
+    : erstattOppstartSetninger(tail, input.foreslattOppstartTekst)
   const overskrift = deling.arbeidslisteOverskrift
-  const kroppEtterIntro = `${overskrift}\n\n${tailMedOppstart}`
-  const midt = nyIntro ? `${nyIntro}\n\n${kroppEtterIntro}` : kroppEtterIntro
+  const maalLinje = byggOppstartMaalLinje(input.foreslattOppstartTekst)
+  const endeligIntro =
+    !introMedOppstart.fantOppstartslinje && !tailMedOppstartResultat.fantOppstartslinje
+      ? (introMedOppstart.tekst.trim()
+          ? `${introMedOppstart.tekst.trimEnd()}\n\n${maalLinje}`
+          : maalLinje)
+      : introMedOppstart.tekst
+  const kroppEtterIntro = `${overskrift}\n\n${tailMedOppstartResultat.tekst}`
+  const midt = endeligIntro ? `${endeligIntro}\n\n${kroppEtterIntro}` : kroppEtterIntro
 
   return `${head}${META_SEP}${midt}`
 }

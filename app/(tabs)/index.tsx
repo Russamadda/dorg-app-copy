@@ -29,11 +29,13 @@ import {
   slettTilbud,
 } from '../../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../../lib/firmaCache'
+import { erMinimumFirmaprofilFullfort } from '../../lib/firmaSetup'
 import { fabEmitter } from '../../lib/fabEmitter'
 import type { Forespørsel, Firma } from '../../types'
 import TopBar, { getTopBarOuterHeight } from '../../components/TopBar'
 import ForespørselKort from '../../components/ForespørselKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
+import FullforBedriftsprofilModal from '../../components/FullforBedriftsprofilModal'
 import ToastMessage from '../../components/ToastMessage'
 import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
 import { Colors } from '../../constants/colors'
@@ -100,6 +102,7 @@ export default function ForespørslerScreen() {
   const jobbtyperListe = useMemo(() => hentTilbudJobbtyper(firma), [firma])
   const [aktivFilter, setAktivFilter] = useState<FilterKey>('alle')
   const [toast, setToast] = useState({ visible: false, message: '' })
+  const [visProfilBlokkering, setVisProfilBlokkering] = useState(false)
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -147,13 +150,56 @@ export default function ForespørslerScreen() {
 
   // Ikke bruk useFocusEffect til FAB: RN Modal (nytt tilbud) kan trigge blur → cleanup
   // fjerner lytteren mens skjermen fortsatt er «Forespørsler», og FAB virker død etter lukking.
+  const håndterStartNyttTilbud = useCallback(() => {
+    if (!erMinimumFirmaprofilFullfort(firma)) {
+      setVisProfilBlokkering(true)
+      return
+    }
+
+    tilbudFlyt.fabTrykket()
+  }, [firma, tilbudFlyt.fabTrykket])
+
+  const håndterFullforProfil = useCallback(() => {
+    setVisProfilBlokkering(false)
+    tilbudFlyt.lukkModal()
+    router.push({
+      pathname: '/bedrift',
+      params: { openProfile: String(Date.now()) },
+    })
+  }, [router, tilbudFlyt.lukkModal])
+
+  const håndterTjenesteValgt = useCallback(
+    (tjeneste: string) => {
+      if (!erMinimumFirmaprofilFullfort(firma)) {
+        tilbudFlyt.lukkTjenesteSheet()
+        setVisProfilBlokkering(true)
+        return
+      }
+
+      tilbudFlyt.onTjenesteValgt(tjeneste)
+    },
+    [firma, tilbudFlyt.lukkTjenesteSheet, tilbudFlyt.onTjenesteValgt]
+  )
+
+  const håndterÅpneUtkast = useCallback(
+    (forespørsel: Forespørsel) => {
+      if (!erMinimumFirmaprofilFullfort(firma)) {
+        setVisProfilBlokkering(true)
+        return
+      }
+
+      tilbudFlyt.åpneMedUtkast(forespørsel)
+    },
+    [firma, tilbudFlyt.åpneMedUtkast]
+  )
+
   useEffect(() => {
     return fabEmitter.on(aktivRute => {
       if (aktivRute === 'index') {
-        tilbudFlyt.fabTrykket()
+        håndterStartNyttTilbud()
       }
     })
-  }, [tilbudFlyt.fabTrykket])
+  }, [håndterStartNyttTilbud])
 
   function onRefresh() {
     setOppdaterer(true)
@@ -243,12 +289,12 @@ export default function ForespørslerScreen() {
       <View style={styles.rowFront}>
         <ForespørselKort
           forespørsel={item}
-          onÅpneUtkast={tilbudFlyt.åpneMedUtkast}
+          onÅpneUtkast={håndterÅpneUtkast}
           onGåTilTilbud={gåTilTilbudMedId}
         />
       </View>
     ),
-    [gåTilTilbudMedId, tilbudFlyt.åpneMedUtkast]
+    [gåTilTilbudMedId, håndterÅpneUtkast]
   )
 
   const håndterRowDidOpen = useCallback(
@@ -419,6 +465,7 @@ export default function ForespørslerScreen() {
             onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
             utkastKilde={tilbudFlyt.utkastKilde}
             onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
+            onRequestFullforProfil={() => setVisProfilBlokkering(true)}
             onSendt={navn => {
               lastData()
               setToast({ visible: true, message: `Tilbud sendt til ${navn}` })
@@ -430,7 +477,12 @@ export default function ForespørslerScreen() {
           onClose={tilbudFlyt.lukkTjenesteSheet}
           jobbtyper={jobbtyperListe}
           valgtTjeneste={tilbudFlyt.valgtTjeneste}
-          onSelect={tilbudFlyt.onTjenesteValgt}
+          onSelect={håndterTjenesteValgt}
+        />
+        <FullforBedriftsprofilModal
+          visible={visProfilBlokkering}
+          onClose={() => setVisProfilBlokkering(false)}
+          onFullforProfil={håndterFullforProfil}
         />
     </SafeAreaView>
   )

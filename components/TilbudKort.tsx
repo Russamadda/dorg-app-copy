@@ -20,6 +20,7 @@ import { tilbudTrengerHandlingGlow } from '../lib/tilbudNotifLogikk'
 interface TilbudKortProps {
   tilbud: Forespørsel
   onPress: (tilbud: Forespørsel) => void
+  godkjentOutline?: boolean
   /** Opptaksdemo: kort «trykkes» visuelt før detaljer åpnes. */
   opptaksDemoTrykkPulse?: boolean
 }
@@ -36,7 +37,12 @@ function formaterKortDato(tilbud: Forespørsel) {
   })
 }
 
-function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: TilbudKortProps) {
+function TilbudKortInner({
+  tilbud,
+  onPress,
+  godkjentOutline = false,
+  opptaksDemoTrykkPulse = false,
+}: TilbudKortProps) {
   const pulseAnim = useRef(new Animated.Value(0)).current
   const demoTrykkScale = useRef(new Animated.Value(1)).current
   const totalInklMva = beregnTilbudTotalInklMva(tilbud)
@@ -44,6 +50,7 @@ function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: Til
   const statusMeta = getTilbudStatusPresentasjon(tilbud)
   const datoTekst = formaterKortDato(tilbud)
   const visUlestIndikator = tilbudTrengerHandlingGlow(tilbud)
+  const visStatiskGodkjentOutline = godkjentOutline && tilbud.status === 'godkjent' && !visUlestIndikator
   const ulestFarge = tilbud.status === 'godkjent' ? '#16A34A' : '#2563EB'
   const outlineOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -115,6 +122,12 @@ function TilbudKortInner({ tilbud, onPress, opptaksDemoTrykkPulse = false }: Til
                 opacity: outlineOpacity,
               },
             ]}
+          />
+        ) : null}
+        {visStatiskGodkjentOutline ? (
+          <View
+            pointerEvents="none"
+            style={[styles.unreadOutline, styles.staticApprovedOutline]}
           />
         ) : null}
 
@@ -193,6 +206,9 @@ function erLikeTilbudKortProps(prev: TilbudKortProps, next: TilbudKortProps): bo
   if (prev.opptaksDemoTrykkPulse !== next.opptaksDemoTrykkPulse) {
     return false
   }
+  if (prev.godkjentOutline !== next.godkjentOutline) {
+    return false
+  }
   const a = prev.tilbud
   const b = next.tilbud
   return (
@@ -214,6 +230,7 @@ function erLikeTilbudKortProps(prev: TilbudKortProps, next: TilbudKortProps): bo
     a.avslattDato === b.avslattDato &&
     a.justeringOnsketDato === b.justeringOnsketDato &&
     a.antallPaminnelser === b.antallPaminnelser &&
+    a.settSomLest === b.settSomLest &&
     a.forstePaminnelseSendtDato === b.forstePaminnelseSendtDato &&
     a.sistePaminnelseSendtDato === b.sistePaminnelseSendtDato &&
     a.forstePaminnelseDato === b.forstePaminnelseDato &&
@@ -255,6 +272,10 @@ const styles = StyleSheet.create({
     left: 0,
     borderRadius: 20,
     borderWidth: 1.5,
+  },
+  staticApprovedOutline: {
+    borderColor: '#16A34A',
+    opacity: 0.34,
   },
   cardChevron: {
     position: 'absolute',

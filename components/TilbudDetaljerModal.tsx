@@ -20,9 +20,13 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { genererTilbud } from '../lib/openai'
 import { sendPaminnelseEpost, sendTilbudEpost } from '../lib/resend'
+import { eksporterUtfortPdf, hentUtfortSnapshot, opprettUtfortSnapshot } from '../lib/utfort'
 import {
   hentFirma,
   hentTilbudHendelser,
+  hentTilbudMaterialer,
+  lagreTilbudMaterial,
+  slettTilbudMaterial,
   oppdaterTilbudSnapshotUtenHendelse,
   registrerForstePaminnelseSendt,
   registrerSistePaminnelseSendt,
@@ -39,7 +43,6 @@ import { TilbudsForhåndsvisning } from './TilbudsForhåndsvisning'
 import MaterialSpesifiseringScreen from './MaterialSpesifiseringScreen'
 import { OppdaterGrunnlag } from './OppdaterGrunnlag'
 import {
-  composeOfferTextWithMaterialOverview,
   fjernMaterialoversiktFraTilbudTekst,
   harBrukbareMaterialrader,
   parseMaterialSpesifiseringFraMetadata,
@@ -47,7 +50,20 @@ import {
   summerMaterialSpesifisering,
   type MaterialSpesifiseringRad,
 } from '../lib/materialSpesifisering'
-import type { Forespørsel, Firma, TilbudHendelse, TilbudHendelseType } from '../types'
+import {
+  MATERIAL_START,
+  byggMaterialSeksjon,
+  fjernMaterialSeksjon,
+  harGyldigeMarkorer,
+  leggInnMaterialSeksjon,
+} from '../lib/materialSeksjon'
+import type {
+  Forespørsel,
+  Firma,
+  TilbudHendelse,
+  TilbudHendelseType,
+  UtfortOppdragSnapshot,
+} from '../types'
 import { getTilbudStatusPresentasjon } from '../utils/tilbudStatus'
 import { OFFER_FLOW_DEMO_DETALJER_PREVIEW_SCROLL_MS } from '../lib/demoRecording/offerFlowDemoConfig'
 import { sleep, smoothScrollY } from '../lib/demoRecording/offerFlowDemoPrimitives'
@@ -91,6 +107,7 @@ interface Props {
   onClose: () => void
   onOppdatert: (kundeNavn: string) => void
   onUtfort?: (kundeNavn: string) => void
+  onUtfortFeil?: (melding: string) => void
   /** Opptaksdemo: sakte scroll til bunn av tilbudstekst etter åpning. */
   opptaksDemoScrollPreview?: boolean
   onOpptaksDemoScrollPreviewFerdig?: () => void
@@ -114,6 +131,10 @@ function formaterAbsoluttDato(datoString?: string) {
     day: 'numeric',
     month: 'long',
   })
+}
+
+function formaterKr(verdi: number) {
+  return `kr ${Math.round(verdi).toLocaleString('nb-NO')}`
 }
 
 function dagerSiden(datoString?: string) {
@@ -572,6 +593,7 @@ export default function TilbudDetaljerModal({
   onClose,
   onOppdatert,
   onUtfort,
+  onUtfortFeil,
   opptaksDemoScrollPreview = false,
   onOpptaksDemoScrollPreviewFerdig,
 }: Props) {
@@ -585,6 +607,8 @@ export default function TilbudDetaljerModal({
   const inlineBekreftOpacity = useRef(new Animated.Value(0)).current
   const inlineBekreftTranslate = useRef(new Animated.Value(6)).current
   const tilKundenPuls = useRef(new Animated.Value(1)).current
+  const utfortEksportStatusOpacity = useRef(new Animated.Value(0)).current
+  const utfortEksportStatusTranslate = useRef(new Animated.Value(6)).current
   const forrigeViserOppdatertRef = useRef(false)
   const [firma, setFirma] = useState<Firma | null>(null)
   const [hendelser, setHendelser] = useState<TilbudHendelse[] | null>(null)
@@ -606,6 +630,12 @@ export default function TilbudDetaljerModal({
   const [originalMaterialkostnadFørSpec, setOriginalMaterialkostnadFørSpec] = useState<number | null>(null)
   const [sender, setSender] = useState(false)
   const [markererUtfort, setMarkererUtfort] = useState(false)
+  const [lasterUtfortSnapshot, setLasterUtfortSnapshot] = useState(false)
+  const [utfortSnapshot, setUtfortSnapshot] = useState<UtfortOppdragSnapshot | null>(null)
+  const [utfortSnapshotFeil, setUtfortSnapshotFeil] = useState<string | null>(null)
+  const [eksportererUtfortPdf, setEksportererUtfortPdf] = useState(false)
+  const [utfortPdfStatus, setUtfortPdfStatus] = useState<string | null>(null)
+  const [viserUtfortTilbudstekst, setViserUtfortTilbudstekst] = useState(false)
   const [avviserJustering, setAvviserJustering] = useState(false)
   const [justeringFase, setJusteringFase] = useState<'klar' | 'genererer' | 'klar_til_sending'>('klar')
   const [senderPaminnelse, setSenderPaminnelse] = useState(false)
@@ -632,7 +662,18 @@ export default function TilbudDetaljerModal({
 
     async function lastData() {
       try {
-        const hendelserData = tilbud ? await hentTilbudHendelser(tilbud.id) : []
+        const [hendelserData, dbMaterialer] = await Promise.all([
+          tilbud ? hentTilbudHendelser(tilbud.id) : Promise.resolve([]),
+          tilbud
+            ? hentTilbudMaterialer(tilbud.id).catch(error => {
+                console.warn('[TilbudDetaljerModal] Kunne ikke hente tilbud_materialer', {
+                  tilbudId: tilbud.id,
+                  error: error instanceof Error ? error.message : String(error),
+                })
+                return []
+              })
+            : Promise.resolve([]),
+        ])
 
         const {
           data: { user },
@@ -642,6 +683,7 @@ export default function TilbudDetaljerModal({
           setHendelser(hendelserData)
           setMaterialSpesifiseringRader(current => {
             if (current.length > 0) return current
+            if (dbMaterialer.length > 0) return dbMaterialer
             return hentMaterialSpesifiseringFraHendelser(hendelserData)
           })
           const lagretManuellMaterialkostnad =
@@ -691,13 +733,23 @@ export default function TilbudDetaljerModal({
       setOppdatertTekst('')
       setVisMaterialSpesifisering(false)
       setMaterialSpesifiseringRader(hentMaterialSpesifiseringFraHendelser(cachedeHendelser))
-      const harMaterialoversikt = /^Materialoversikt:\s*$/m.test(tilbud.generertTekst ?? '')
+      const harMaterialoversikt =
+        /^Materialoversikt:\s*$/m.test(tilbud.generertTekst ?? '') ||
+        harGyldigeMarkorer(tilbud.generertTekst ?? '') ||
+        (tilbud.generertTekst ?? '').includes(MATERIAL_START)
       setHarMaterialoversiktFraOriginalTekst(harMaterialoversikt)
       setBrukMaterialerITilbudstekst(harMaterialoversikt)
       setSpecPrisErBekrefteted(false)
       setOriginalMaterialkostnadFørSpec(null)
       setSender(false)
       setSenderPaminnelse(false)
+      setUtfortSnapshot(null)
+      setUtfortSnapshotFeil(null)
+      setEksportererUtfortPdf(false)
+      setUtfortPdfStatus(null)
+      setViserUtfortTilbudstekst(false)
+      utfortEksportStatusOpacity.setValue(0)
+      utfortEksportStatusTranslate.setValue(6)
       setHendelser(cachedeHendelser)
       setJusteringFase('klar')
       bekreftAnimasjon.setValue(0)
@@ -707,7 +759,49 @@ export default function TilbudDetaljerModal({
       inlineBekreftTranslate.setValue(6)
       tilKundenPuls.setValue(1)
     }
-  }, [tilbud?.id, bekreftAnimasjon, inlineBekreftOpacity, inlineBekreftTranslate, tilKundenPuls])
+  }, [
+    tilbud?.id,
+    bekreftAnimasjon,
+    inlineBekreftOpacity,
+    inlineBekreftTranslate,
+    tilKundenPuls,
+    utfortEksportStatusOpacity,
+    utfortEksportStatusTranslate,
+  ])
+
+  useEffect(() => {
+    if (!visible || !tilbud || tilbud.status.toLowerCase() !== 'utfort') {
+      setLasterUtfortSnapshot(false)
+      return
+    }
+
+    let avbrutt = false
+    setLasterUtfortSnapshot(true)
+    setUtfortSnapshotFeil(null)
+
+    void (async () => {
+      try {
+        const snapshot = await hentUtfortSnapshot(tilbud.id)
+        if (!avbrutt) {
+          setUtfortSnapshot(snapshot)
+        }
+      } catch (error) {
+        if (!avbrutt) {
+          setUtfortSnapshotFeil(
+            error instanceof Error ? error.message : 'Kunne ikke hente utført-grunnlag.'
+          )
+        }
+      } finally {
+        if (!avbrutt) {
+          setLasterUtfortSnapshot(false)
+        }
+      }
+    })()
+
+    return () => {
+      avbrutt = true
+    }
+  }, [visible, tilbud?.id, tilbud?.status])
 
   const harPrisEndring = useMemo(() => {
     if (!tilbud) return false
@@ -823,6 +917,31 @@ export default function TilbudDetaljerModal({
   }, [viserOppdatertPris, inlineBekreftOpacity, inlineBekreftTranslate])
 
   useEffect(() => {
+    if (!utfortPdfStatus) {
+      utfortEksportStatusOpacity.setValue(0)
+      utfortEksportStatusTranslate.setValue(6)
+      return
+    }
+
+    utfortEksportStatusOpacity.setValue(0)
+    utfortEksportStatusTranslate.setValue(6)
+    Animated.parallel([
+      Animated.timing(utfortEksportStatusOpacity, {
+        toValue: 1,
+        duration: 280,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(utfortEksportStatusTranslate, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [utfortPdfStatus, utfortEksportStatusOpacity, utfortEksportStatusTranslate])
+
+  useEffect(() => {
     const bleOppdatert = viserOppdatertPris && !forrigeViserOppdatertRef.current
     forrigeViserOppdatertRef.current = viserOppdatertPris
     if (!bleOppdatert || !tilbud?.generertTekst) return
@@ -874,10 +993,33 @@ export default function TilbudDetaljerModal({
   const dagerSidenSistSendt = dagerSiden(sisteSendtDato) ?? 0
   const antallPaminnelser = aktivtTilbud.antallPaminnelser ?? 0
 
-  const timepris = firma?.timepris ?? 950
-  const matPaslag = firma?.materialPaslag ?? 15
-  const timer = valgtTimer
-  const materialkostnad = aktivMaterialkostnad
+  const utfortPrisgrunnlag = utfortSnapshot?.prisgrunnlag
+  const visningstilbud = erUtfortTilbud && utfortSnapshot
+    ? {
+        ...aktivtTilbud,
+        generertTekst: utfortSnapshot.tilbudstekst ?? aktivtTilbud.generertTekst,
+        timer: utfortSnapshot.timer,
+        materialkostnad: utfortSnapshot.materialkostnad,
+        prisEksMva: utfortSnapshot.prisEksMva,
+        jobbBeskrivelse: utfortSnapshot.jobbBeskrivelse ?? aktivtTilbud.jobbBeskrivelse,
+        kortBeskrivelse: utfortSnapshot.kortBeskrivelse ?? aktivtTilbud.kortBeskrivelse,
+        jobbType: utfortSnapshot.jobbType ?? aktivtTilbud.jobbType,
+        adresse: utfortSnapshot.kundeAdresse ?? aktivtTilbud.adresse,
+        kundeTelefon: utfortSnapshot.kundeTelefon ?? aktivtTilbud.kundeTelefon,
+        kundeEpost: utfortSnapshot.kundeEpost ?? aktivtTilbud.kundeEpost,
+      }
+    : aktivtTilbud
+
+  const timepris = erUtfortTilbud
+    ? (utfortPrisgrunnlag?.timepris ?? firma?.timepris ?? 950)
+    : (firma?.timepris ?? 950)
+  const matPaslag = erUtfortTilbud
+    ? (utfortPrisgrunnlag?.materialPaslag ?? firma?.materialPaslag ?? 15)
+    : (firma?.materialPaslag ?? 15)
+  const timer = erUtfortTilbud ? (utfortSnapshot?.timer ?? aktivtTilbud.timer ?? 8) : valgtTimer
+  const materialkostnad = erUtfortTilbud
+    ? (utfortSnapshot?.materialkostnad ?? aktivtTilbud.materialkostnad ?? 0)
+    : aktivMaterialkostnad
   const prisLinjer = beregnTilbudPrisLinjer({
     timer,
     materialkostnad,
@@ -885,14 +1027,21 @@ export default function TilbudDetaljerModal({
     materialPaslag: matPaslag,
   })
   const sumEksMva = prisLinjer.totalEksMva
-  const totalInklMva = prisLinjer.totalInklMva
-  const materialerInklMva = prisLinjer.materialerInklMva
-  const arbeidInklMva = prisLinjer.arbeidInklMva
-  const grunntekst = fjernKortLinje(aktivtTilbud.generertTekst ?? '')
+  const totalInklMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.totalInklMva ?? prisLinjer.totalInklMva)
+    : prisLinjer.totalInklMva
+  const materialerInklMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.materialerInklMva ?? prisLinjer.materialerInklMva)
+    : prisLinjer.materialerInklMva
+  const arbeidInklMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.arbeidInklMva ?? prisLinjer.arbeidInklMva)
+    : prisLinjer.arbeidInklMva
+  const grunntekst = fjernKortLinje(visningstilbud.generertTekst ?? '')
+  const grunntekstUtenMaterial = harAktivMaterialspesifisering
+    ? fjernMaterialSeksjon(fjernMaterialoversiktFraTilbudTekst(grunntekst))
+    : grunntekst
   const prisjustertGrunntekst = oppdaterPrisITekst(
-    harAktivMaterialspesifisering
-      ? fjernMaterialoversiktFraTilbudTekst(grunntekst)
-      : grunntekst,
+    grunntekstUtenMaterial,
     materialerInklMva,
     arbeidInklMva,
     totalInklMva
@@ -901,15 +1050,30 @@ export default function TilbudDetaljerModal({
   const visHistorikkIOverblikk =
     hendelser === null || presentasjon.timelineEvents.length > 0
 
+  const utfortMaterialrader = erUtfortTilbud
+    ? (utfortSnapshot?.materialspesifikasjon ?? materialSpesifiseringRader)
+    : materialSpesifiseringRader
+  const utfortArbeidEksMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.arbeidEksMva ?? prisLinjer.arbeidEksMva)
+    : prisLinjer.arbeidEksMva
+  const utfortMaterialerEksMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.materialerEksMva ?? prisLinjer.materialerEksMva)
+    : prisLinjer.materialerEksMva
+  const utfortTotalEksMva = erUtfortTilbud
+    ? (utfortSnapshot?.summaryData.totalEksMva ?? (utfortArbeidEksMva + utfortMaterialerEksMva))
+    : prisLinjer.totalEksMva
+  const utfortMvaBelop = Math.max(0, totalInklMva - utfortTotalEksMva)
+
   const visningsTekst = viserOppdatertPris
     ? erJusteringsTilbud
       ? (oppdatertTekst || grunntekst)
       : harAktivMaterialspesifisering
         ? (brukMaterialerITilbudstekst
-            ? composeOfferTextWithMaterialOverview(prisjustertGrunntekst, materialSpesifiseringRader)
+            ? leggInnMaterialSeksjon(prisjustertGrunntekst, byggMaterialSeksjon(materialSpesifiseringRader))
             : prisjustertGrunntekst)
         : prisjustertGrunntekst
     : grunntekst
+  const visningsTekstForUtfort = utfortSnapshot?.tilbudstekst?.trim() || visningsTekst
 
   const kanBekrefte = erJusteringsTilbud
     ? true
@@ -1089,6 +1253,7 @@ export default function TilbudDetaljerModal({
     setMarkererUtfort(true)
     try {
       const opprettetDato = new Date().toISOString()
+      await opprettUtfortSnapshot(aktivtTilbud.id)
       await registrerTilbudUtfort({
         tilbudId: aktivtTilbud.id,
         firmaId: aktivtTilbud.firmaId,
@@ -1099,14 +1264,29 @@ export default function TilbudDetaljerModal({
       onClose()
     } catch (error) {
       console.error('Feil ved markering som utført:', error)
+      onUtfortFeil?.(error instanceof Error ? error.message : 'Kunne ikke markere jobb som utført.')
     } finally {
       setMarkererUtfort(false)
     }
   }
 
+  const handleEksporterUtfortPdf = async () => {
+    if (!erUtfortTilbud || eksportererUtfortPdf) return
+    setEksportererUtfortPdf(true)
+    setUtfortPdfStatus(null)
+    try {
+      const result = await eksporterUtfortPdf(aktivtTilbud.id)
+      setUtfortPdfStatus(`PDF sendt til ${result.sentTo}`)
+    } catch (error) {
+      setUtfortPdfStatus(error instanceof Error ? error.message : 'Kunne ikke eksportere PDF.')
+    } finally {
+      setEksportererUtfortPdf(false)
+    }
+  }
+
 
   async function åpneTelefon() {
-    const nummer = rensTelefonnummer(aktivtTilbud.kundeTelefon)
+    const nummer = rensTelefonnummer(visningstilbud.kundeTelefon)
     if (!nummer) return
 
     const url = `tel:${nummer}`
@@ -1117,9 +1297,9 @@ export default function TilbudDetaljerModal({
   }
 
   async function åpneEpost() {
-    if (!aktivtTilbud.kundeEpost) return
+    if (!visningstilbud.kundeEpost) return
 
-    const url = `mailto:${aktivtTilbud.kundeEpost}`
+    const url = `mailto:${visningstilbud.kundeEpost}`
     const kanÅpne = await Linking.canOpenURL(url)
     if (kanÅpne) {
       await Linking.openURL(url)
@@ -1196,14 +1376,31 @@ export default function TilbudDetaljerModal({
   }
 
   function lagreMaterialrad(rad: MaterialSpesifiseringRad) {
+    const sortering = materialSpesifiseringRader.some(item => item.id === rad.id)
+      ? materialSpesifiseringRader.findIndex(item => item.id === rad.id)
+      : materialSpesifiseringRader.length
+
     setMaterialSpesifiseringRader(current => {
       const finnes = current.some(item => item.id === rad.id)
       return finnes ? current.map(item => (item.id === rad.id ? rad : item)) : [...current, rad]
     })
+
+    if (!firma || !tilbud) return
+
+    lagreTilbudMaterial(tilbud.id, firma.id, rad, sortering)
+      .then(dbId => {
+        if (dbId !== rad.id) {
+          setMaterialSpesifiseringRader(current =>
+            current.map(item => (item.id === rad.id ? { ...item, id: dbId } : item))
+          )
+        }
+      })
+      .catch(e => console.error('[materialer] Feil ved lagring:', e))
   }
 
   function slettMaterialrad(id: string) {
     setMaterialSpesifiseringRader(current => current.filter(rad => rad.id !== id))
+    slettTilbudMaterial(id).catch(e => console.error('[materialer] Feil ved sletting:', e))
   }
 
   function brukSpesifisertMaterialsumIPrisen(brukITilbudstekst: boolean) {
@@ -1214,7 +1411,9 @@ export default function TilbudDetaljerModal({
     setBrukMaterialerITilbudstekst(brukITilbudstekst)
     setHarMaterialoversiktFraOriginalTekst(true)
     setVisMaterialSpesifisering(false)
-    nullstillEtterPrisRedigering()
+    // Vis den oppdaterte teksten umiddelbart. Kaller IKKE nullstillEtterPrisRedigering()
+    // fordi det ville skjult teksten igjen ved å sette viserOppdatertPris = false.
+    setViserOppdatertPris(true)
   }
 
   function handleTimerChange(value: number) {
@@ -1273,10 +1472,10 @@ export default function TilbudDetaljerModal({
           }}
         >
           <OfferInternalSummaryCard
-            tilbud={aktivtTilbud}
+            tilbud={visningstilbud}
             tjenesteLabel={
-              aktivtTilbud.kortBeskrivelse ||
-              aktivtTilbud.jobbType ||
+              visningstilbud.kortBeskrivelse ||
+              visningstilbud.jobbType ||
               'Tilbud'
             }
             totalInklMva={totalInklMva}
@@ -1612,21 +1811,242 @@ export default function TilbudDetaljerModal({
                 onPress={() => void markerSomUtfort()}
                 activeOpacity={0.92}
                 disabled={!firma || markererUtfort}
-                style={styles.primaryCtaFullWidth}
+                style={[
+                  styles.primaryCtaFullWidth,
+                  (!firma || markererUtfort) && styles.primaryCtaDisabled,
+                ]}
               >
                 <LinearGradient
                   colors={['rgba(56,189,98,0.98)', 'rgba(24,100,58,0.99)']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
-                  style={styles.primaryCtaGradient}
+                  style={[styles.primaryCtaGradient, styles.primaryCtaLoadingGradient]}
                 >
-                  <Text style={styles.primaryCtaTekst}>Marker som utført</Text>
+                  {markererUtfort ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" style={styles.primaryCtaSpinner} />
+                  ) : null}
+                  <Text style={styles.primaryCtaTekst}>
+                    {markererUtfort ? 'Markerer som utført...' : 'Marker som utført'}
+                  </Text>
                 </LinearGradient>
               </TouchableOpacity>
             </View>
           ) : null}
 
-          {aktivtTilbud.generertTekst ? (
+          {erUtfortTilbud ? (
+            <View style={styles.utfortGrunnlagWrap}>
+              <View style={styles.utfortGrunnlagCard}>
+                <Text style={styles.utfortSeksjonLabel}>Fakturagrunnlag</Text>
+                {lasterUtfortSnapshot ? (
+                  <View style={styles.utfortStatusRad}>
+                    <ActivityIndicator size="small" color="rgba(0,255,150,0.7)" />
+                    <Text style={styles.utfortStatusTekst}>Henter utført grunnlag …</Text>
+                  </View>
+                ) : null}
+                {utfortSnapshotFeil ? (
+                  <Text style={styles.utfortFeilTekst}>{utfortSnapshotFeil}</Text>
+                ) : null}
+
+                <View style={styles.utfortSeksjonsStack}>
+                  <View>
+                    <View style={[styles.utfortSeksjonsKort, styles.utfortArbeidKort]}>
+                    <View style={styles.utfortLinje}>
+                      <Text style={styles.utfortLinjeLabel}>Estimert arbeidstid</Text>
+                      <Text style={styles.utfortLinjeVerdi}>
+                        {timer.toLocaleString('nb-NO')} t
+                      </Text>
+                    </View>
+                    <View style={[styles.utfortLinje, styles.utfortRadSpacing]}>
+                      <Text style={styles.utfortLinjeLabel}>Timesats</Text>
+                      <Text style={styles.utfortLinjeVerdi}>
+                        {formaterKr(timepris)}/t
+                      </Text>
+                    </View>
+                  </View>
+                  </View>
+
+                  <View>
+                    <View style={styles.utfortMaterialListeKort}>
+                    {utfortMaterialrader.length > 0 ? (
+                      <>
+                        <View style={styles.utfortMaterialHeaderRad}>
+                          <Text style={[styles.utfortMaterialHeaderTekst, styles.utfortMaterialHeaderNavn]}>
+                            Materiale
+                          </Text>
+                          <View style={styles.utfortMaterialVertikalSkille} />
+                          <View style={styles.utfortMaterialAntallKolonne}>
+                            <Text
+                              style={[
+                                styles.utfortMaterialHeaderTekst,
+                                styles.utfortMaterialHeaderAntall,
+                              ]}
+                            >
+                              Antall
+                            </Text>
+                          </View>
+                          <View style={styles.utfortMaterialVertikalSkille} />
+                          <View style={styles.utfortMaterialBelopKolonne}>
+                            <Text
+                              style={[
+                                styles.utfortMaterialHeaderTekst,
+                                styles.utfortMaterialHeaderBelop,
+                              ]}
+                            >
+                              Totalt
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.utfortMaterialListe}>
+                          {utfortMaterialrader.map((rad, index) => (
+                            <View key={rad.id}>
+                              <View style={styles.utfortMaterialKort}>
+                                <View style={styles.utfortMaterialTopRad}>
+                                  <Text
+                                    style={styles.utfortMaterialNavn}
+                                    numberOfLines={2}
+                                    ellipsizeMode="tail"
+                                  >
+                                    {rad.navn}
+                                  </Text>
+                                  <View style={styles.utfortMaterialVertikalSkille} />
+                                  <View style={styles.utfortMaterialAntallKolonne}>
+                                    <Text style={styles.utfortMaterialMengde}>
+                                      {rad.antall.toLocaleString('nb-NO')} {rad.enhet}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.utfortMaterialVertikalSkille} />
+                                  <View style={styles.utfortMaterialBelopKolonne}>
+                                    <Text
+                                      style={styles.utfortMaterialLinjeSum}
+                                      numberOfLines={1}
+                                      adjustsFontSizeToFit
+                                      minimumFontScale={0.78}
+                                    >
+                                      {formaterKr(rad.linjeTotal)}
+                                    </Text>
+                                  </View>
+                                </View>
+                              </View>
+                              {index < utfortMaterialrader.length - 1 ? (
+                                <View style={styles.utfortMaterialSkille} />
+                              ) : null}
+                            </View>
+                          ))}
+                        </View>
+                      </>
+                    ) : (
+                      <Text style={styles.utfortTomTekst}>Ingen materialspesifikasjon lagret.</Text>
+                    )}
+                  </View>
+                  </View>
+
+                  <View>
+                    <View style={[styles.utfortSeksjonsKort, styles.utfortOppsummeringsKort]}>
+                    <View style={[styles.utfortLinje, styles.utfortTotalLinje, styles.utfortTotalLinjeFørste]}>
+                      <Text style={styles.utfortTotalLabel}>
+                        Arbeid
+                        <Text style={styles.utfortLabelHint}> (eks. mva)</Text>
+                      </Text>
+                      <Text style={styles.utfortTotalVerdi}>
+                        {formaterKr(utfortArbeidEksMva)}
+                      </Text>
+                    </View>
+                    <View style={[styles.utfortLinje, styles.utfortTotalLinje]}>
+                      <Text style={styles.utfortTotalLabel}>
+                        Materialer
+                        <Text style={styles.utfortLabelHint}> (eks. mva, inkl. påslag)</Text>
+                      </Text>
+                      <Text style={styles.utfortTotalVerdi}>
+                        {formaterKr(utfortMaterialerEksMva)}
+                      </Text>
+                    </View>
+                    <View style={[styles.utfortLinje, styles.utfortTotalLinje, styles.utfortSumLinje]}>
+                      <Text style={styles.utfortTotalLabel}>
+                        Sum
+                        <Text style={styles.utfortLabelHint}> (eks. mva)</Text>
+                      </Text>
+                      <Text style={styles.utfortTotalVerdi}>
+                        {formaterKr(utfortTotalEksMva)}
+                      </Text>
+                    </View>
+                    <View style={[styles.utfortLinje, styles.utfortTotalLinje, styles.utfortMvaLinje]}>
+                      <Text style={styles.utfortTotalLabel}>MVA 25%</Text>
+                      <Text style={styles.utfortTotalVerdi}>
+                        {formaterKr(utfortMvaBelop)}
+                      </Text>
+                    </View>
+                    <View style={[styles.utfortLinje, styles.utfortGrandTotalLinje]}>
+                      <Text style={styles.utfortGrandTotalLabel}>
+                        Total
+                        <Text style={styles.utfortLabelHint}> (inkl. mva)</Text>
+                      </Text>
+                      <Text style={styles.utfortGrandTotalVerdi}>
+                        {formaterKr(totalInklMva)}
+                      </Text>
+                    </View>
+                  </View>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.utfortEksportKnapp}
+                  onPress={() => void handleEksporterUtfortPdf()}
+                  activeOpacity={0.86}
+                  disabled={eksportererUtfortPdf}
+                >
+                  <Text style={styles.utfortEksportKnappTekst}>
+                    {eksportererUtfortPdf ? 'Eksporterer PDF …' : 'Eksporter PDF'}
+                  </Text>
+                </TouchableOpacity>
+                {utfortPdfStatus ? (
+                  <Animated.View
+                    style={{
+                      opacity: utfortEksportStatusOpacity,
+                      transform: [{ translateY: utfortEksportStatusTranslate }],
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.utfortEksportStatus,
+                        utfortPdfStatus.startsWith('PDF sendt')
+                          ? styles.utfortEksportStatusSuccess
+                          : styles.utfortEksportStatusError,
+                      ]}
+                    >
+                      {utfortPdfStatus}
+                    </Text>
+                  </Animated.View>
+                ) : null}
+              </View>
+
+              {visningsTekstForUtfort ? (
+                <View style={styles.utfortAccordionCard}>
+                  <TouchableOpacity
+                    style={styles.utfortAccordionHeader}
+                    onPress={() => setViserUtfortTilbudstekst(current => !current)}
+                    activeOpacity={0.84}
+                  >
+                    <Text style={styles.utfortAccordionTittel}>Tilbudstekst ved utføring</Text>
+                    <Ionicons
+                      name={viserUtfortTilbudstekst ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color="rgba(255,255,255,0.76)"
+                      style={styles.utfortAccordionChevron}
+                    />
+                  </TouchableOpacity>
+                  {viserUtfortTilbudstekst ? (
+                    <OfferBodySection>
+                      <TilbudsForhåndsvisning
+                        tekst={visningsTekstForUtfort}
+                        isLoading={false}
+                        tone="dark"
+                      />
+                    </OfferBodySection>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : aktivtTilbud.generertTekst ? (
             <>
               <View
                 onLayout={e => {
@@ -1659,6 +2079,7 @@ export default function TilbudDetaljerModal({
           <MaterialSpesifiseringScreen
             valgtTjeneste={aktivtTilbud.kortBeskrivelse || aktivtTilbud.jobbType || 'Tilbud'}
             valgtMaterialkostnad={manuellMaterialkostnad}
+            materialPaslag={matPaslag}
             rader={materialSpesifiseringRader}
             tilbudstekstHarMaterialoversikt={harMaterialoversiktFraOriginalTekst || brukMaterialerITilbudstekst}
             onClose={() => {
@@ -1668,6 +2089,16 @@ export default function TilbudDetaljerModal({
             onApplyMaterialsum={brukSpesifisertMaterialsumIPrisen}
             onDeleteRow={slettMaterialrad}
             onSaveRow={lagreMaterialrad}
+            onFjernFraTilbudstekst={
+              (harMaterialoversiktFraOriginalTekst || brukMaterialerITilbudstekst)
+                ? () => {
+                    setBrukMaterialerITilbudstekst(false)
+                    setHarMaterialoversiktFraOriginalTekst(false)
+                    setVisMaterialSpesifisering(false)
+                    setViserOppdatertPris(true)
+                  }
+                : undefined
+            }
           />
         </Modal>
       </SafeAreaView>
@@ -1865,12 +2296,15 @@ function OfferStatusHeader({
   currentStatusColor: string
   onClose: () => void
 }) {
+  const headerStatusColor =
+    currentStatus.trim().toLowerCase() === 'utført' ? '#7EF0A9' : currentStatusColor
+
   return (
     <View style={styles.header}>
       <View style={styles.headerSideSpacer} />
 
       <View style={styles.headerCenter}>
-        <Text style={[styles.headerTitle, { color: currentStatusColor }]}>
+        <Text style={[styles.headerTitle, { color: headerStatusColor }]}>
           {currentStatus}
         </Text>
         {statusSubline ? (
@@ -2277,6 +2711,324 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontFamily: 'DMSans_700Bold',
     color: '#0B1F14',
+  },
+  utfortGrunnlagWrap: {
+    gap: 12,
+    marginBottom: 14,
+  },
+  utfortGrunnlagCard: {
+    backgroundColor: '#17181B',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 18,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  utfortSeksjonLabel: {
+    fontSize: 17,
+    lineHeight: 22,
+    fontFamily: 'DMSans_700Bold',
+    color: '#F5F7FA',
+    textAlign: 'center',
+  },
+  utfortStatusRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  utfortStatusTekst: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    color: '#AEB6C2',
+  },
+  utfortFeilTekst: {
+    marginTop: 12,
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: 'DMSans_400Regular',
+    color: '#F87171',
+  },
+  utfortSeksjonsStack: {
+    marginTop: 10,
+    gap: 12,
+  },
+  utfortSeksjonsKort: {
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingTop: 7,
+    paddingBottom: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  utfortArbeidKort: {
+    paddingBottom: 6,
+  },
+  utfortOppsummeringsKort: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  utfortMaterialListeKort: {
+    marginTop: 2,
+    borderRadius: 10,
+    paddingTop: 10,
+    paddingBottom: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: 'rgba(255,255,255,0.015)',
+  },
+  utfortDelTittel: {
+    fontSize: 13,
+    lineHeight: 17,
+    fontFamily: 'DMSans_700Bold',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: 'rgba(255,255,255,0.72)',
+    marginBottom: 4,
+    paddingHorizontal: 2,
+  },
+  utfortLinje: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  utfortRadSpacing: {
+    marginTop: 8,
+  },
+  utfortLinjeLabel: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_400Regular',
+    color: '#D9E1EA',
+  },
+  utfortLinjeVerdi: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#FFFFFF',
+    fontVariant: ['tabular-nums'],
+  },
+  utfortTotalLinje: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.07)',
+  },
+  utfortTotalLinjeFørste: {
+    marginTop: 8,
+    paddingTop: 0,
+    borderTopWidth: 0,
+  },
+  utfortSumLinje: {
+    borderTopColor: 'rgba(56,189,98,0.28)',
+  },
+  utfortMvaLinje: {
+    borderTopWidth: 0,
+  },
+  utfortTotalLabel: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#F5F7FA',
+  },
+  utfortLabelHint: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: 'DMSans_400Regular',
+    color: 'rgba(174,182,194,0.9)',
+  },
+  utfortTotalVerdi: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#FFFFFF',
+    fontVariant: ['tabular-nums'],
+  },
+  utfortMaterialListe: {
+    marginTop: 0,
+  },
+  utfortMaterialKort: {
+    paddingLeft: 10,
+    paddingRight: 10,
+    paddingVertical: 10,
+  },
+  utfortMaterialHeaderRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 10,
+    paddingRight: 10,
+    paddingBottom: 8,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  utfortMaterialHeaderTekst: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontFamily: 'DMSans_700Bold',
+    color: 'rgba(255,255,255,0.44)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  utfortMaterialHeaderNavn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  utfortMaterialAntallKolonne: {
+    width: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  utfortMaterialHeaderAntall: {
+    textAlign: 'center',
+  },
+  utfortMaterialHeaderBelop: {
+    width: '100%',
+    textAlign: 'right',
+  },
+  utfortMaterialBelopKolonne: {
+    width: 96,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  utfortMaterialTopRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  utfortMaterialNavn: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_500Medium',
+    color: '#F3F6FA',
+  },
+  utfortMaterialMengde: {
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: 'DMSans_400Regular',
+    color: '#AEB6C2',
+    fontVariant: ['tabular-nums'],
+  },
+  utfortMaterialLinjeSum: {
+    width: '100%',
+    textAlign: 'right',
+    fontSize: 13,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#FFFFFF',
+    fontVariant: ['tabular-nums'],
+  },
+  utfortMaterialVertikalSkille: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  utfortMaterialSkille: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    marginLeft: 10,
+    marginRight: 10,
+  },
+  utfortTomTekst: {
+    alignSelf: 'stretch',
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'DMSans_400Regular',
+    color: '#AEB6C2',
+    textAlign: 'center',
+  },
+  utfortGrandTotalLinje: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.14)',
+  },
+  utfortGrandTotalLabel: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'DMSans_700Bold',
+    color: '#F5F7FA',
+  },
+  utfortGrandTotalVerdi: {
+    fontSize: 18,
+    lineHeight: 23,
+    fontFamily: 'DMSans_700Bold',
+    color: '#FFFFFF',
+    fontVariant: ['tabular-nums'],
+  },
+  utfortEksportKnapp: {
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(56,189,98,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(56,189,98,0.36)',
+    marginTop: 16,
+    paddingHorizontal: 16,
+  },
+  utfortEksportKnappTekst: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#7EF0A9',
+  },
+  utfortEksportStatus: {
+    marginTop: 10,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'DMSans_400Regular',
+    textAlign: 'center',
+  },
+  utfortEksportStatusSuccess: {
+    color: '#7EF0A9',
+  },
+  utfortEksportStatusError: {
+    color: '#F87171',
+  },
+  utfortAccordionCard: {
+    backgroundColor: '#17181B',
+    borderRadius: 22,
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  utfortAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    position: 'relative',
+    minHeight: 24,
+  },
+  utfortAccordionTittel: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontFamily: 'DMSans_700Bold',
+    color: '#F5F7FA',
+    textAlign: 'center',
+  },
+  utfortAccordionChevron: {
+    position: 'absolute',
+    right: 0,
   },
   justerPrisKort: {
     backgroundColor: '#17181B',
@@ -2949,6 +3701,9 @@ const styles = StyleSheet.create({
   primaryCtaFullWidth: {
     alignSelf: 'stretch',
   },
+  primaryCtaDisabled: {
+    opacity: 0.72,
+  },
   primaryCtaTouch: {
     flex: 1,
     minWidth: 0,
@@ -2965,6 +3720,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+  },
+  primaryCtaLoadingGradient: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  primaryCtaSpinner: {
+    marginRight: 2,
   },
   primaryCtaTekst: {
     fontFamily: 'DMSans_700Bold',

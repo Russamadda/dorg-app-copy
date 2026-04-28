@@ -96,3 +96,58 @@ export interface Prishistorikk {
   total: number
   dato: string
 }
+
+export interface UtfortMateriallinje {
+  id: string
+  materialId?: string | null
+  navn: string
+  enhet: string
+  antall: number
+  prisPerEnhet: number
+  linjeTotal: number
+}
+
+export interface UtfortPrisgrunnlag {
+  prisEksMva: number
+  timer: number
+  materialkostnad: number
+  timepris: number
+  materialPaslag: number
+}
+
+export interface UtfortSummaryData {
+  arbeidEksMva: number
+  materialerEksMva: number
+  totalEksMva: number
+  arbeidInklMva: number
+  materialerInklMva: number
+  totalInklMva: number
+}
+
+export interface UtfortOppdragSnapshot {
+  id: string
+  tilbudId: string
+  firmaId: string
+  firmanavn: string
+  firmaOrgNummer?: string | null
+  firmaEpost?: string | null
+  firmaTelefon?: string | null
+  firmaAdresse?: string | null
+  kundeNavn: string
+  kundeEpost?: string | null
+  kundeTelefon?: string | null
+  kundeAdresse?: string | null
+  jobbBeskrivelse?: string | null
+  kortBeskrivelse?: string | null
+  jobbType?: string | null
+  tilbudstekst?: string | null
+  timer: number
+  materialkostnad: number
+  prisEksMva: number
+  prisgrunnlag: UtfortPrisgrunnlag
+  materialspesifikasjon: UtfortMateriallinje[]
+  summaryData: UtfortSummaryData
+  utfortDato: string
+  opprettetDato: string
+  sistOppdatertDato: string
+}

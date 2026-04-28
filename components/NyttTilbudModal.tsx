@@ -22,7 +22,6 @@ import {
   Easing,
   Pressable,
   Alert,
-  InteractionManager,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -34,11 +33,15 @@ import { sendTilbudEpost } from '../lib/resend'
 import {
   lagreForespørsel,
   lagreTilbudUtkast,
+  lagreAlleTilbudMaterialer,
+  slettAlleTilbudMaterialer,
+  hentTilbudMaterialer,
   oppdaterForespørsel,
   registrerForsteTilbudSendt,
   supabase,
 } from '../lib/supabase'
 import { getCachedFirma } from '../lib/firmaCache'
+import { erMinimumFirmaprofilFullfort } from '../lib/firmaSetup'
 import { formatTimerOversiktNyttTilbud } from '../lib/formatTilbudVisning'
 import { fjernKortLinje, rensEnkelMarkdownForRedigering } from '../lib/tekstUtils'
 import {
@@ -88,7 +91,6 @@ import { byggStubTilbudForRecordingDemo } from '../lib/demoRecording/stubTilbudF
 import {
   byggMaterialSpesifiseringRad,
   byggMaterialSpesifiseringSignatur,
-  composeOfferTextWithMaterialOverview,
   fjernMaterialoversiktFraTilbudTekst,
   harBrukbareMaterialrader,
   harMaterialraderForTekst,
@@ -96,6 +98,12 @@ import {
   summerMaterialSpesifisering,
   type MaterialSpesifiseringRad,
 } from '../lib/materialSpesifisering'
+import {
+  byggMaterialSeksjon,
+  fjernMaterialSeksjon,
+  harGyldigeMarkorer,
+  leggInnMaterialSeksjon,
+} from '../lib/materialSeksjon'
 
 const TIMER_VERDIER = [
   0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -154,10 +162,18 @@ interface Props {
   /** Rad å gjenåpne (status utkast); konsumeres etter hydrering. */
   utkastKilde?: Forespørsel | null
   onConsumedUtkastKilde?: () => void
+  onRequestFullforProfil?: () => void
 }
 
 function erGyldigEpost(epost: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(epost.trim())
+}
+
+function hentFeilmelding(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim()
+  }
+  return 'Ukjent feil.'
 }
 
 /** Kort med fast høyde: skrivefelt over + reelt bunnfelt (delelinje + hjelpetekst), ikke overlapp. */
@@ -211,6 +227,7 @@ export default function NyttTilbudModal({
   onRequestVelgTjeneste,
   utkastKilde = null,
   onConsumedUtkastKilde,
+  onRequestFullforProfil,
 }: Props) {
   const insets = useSafeAreaInsets()
   const genererKnappScale = useRef(new Animated.Value(1)).current
@@ -330,6 +347,21 @@ export default function NyttTilbudModal({
     onClose()
   }
 
+  function synkUtkastMaterialerIbakgrunnen(
+    tilbudId: string,
+    firmaId: string,
+    rader: MaterialSpesifiseringRad[]
+  ) {
+    void (async () => {
+      try {
+        await slettAlleTilbudMaterialer(tilbudId)
+        await lagreAlleTilbudMaterialer(tilbudId, firmaId, rader)
+      } catch (e) {
+        console.error('[NyttTilbudModal] sync utkast-materialer:', e)
+      }
+    })()
+  }
+
   function forespørLukkMedUtkastValg() {
     if (!visible || lukkingPågårRef.current) return
     if (visKundeSkjema) {
@@ -368,9 +400,10 @@ export default function NyttTilbudModal({
                   utførLukkUtenLagring()
                   return
                 }
+                const materialraderSnapshot = materialSpesifiseringRader.map(rad => ({ ...rad }))
                 const tekstForLagring =
                   erGenerert ? (råGenerertTekst.trim() || generertTekst.trim() || null) : null
-                await lagreTilbudUtkast({
+                const lagretUtkast = await lagreTilbudUtkast({
                   id: utkastRadIdRef.current ?? undefined,
                   firmaId: firmaGrunnlag.id,
                   jobbType: valgtTjeneste,
@@ -381,9 +414,13 @@ export default function NyttTilbudModal({
                   generertTekst: tekstForLagring,
                   draftStage: erGenerert ? 'preview' : 'builder',
                 })
-                InteractionManager.runAfterInteractions(() => {
-                  utførLukkUtenLagring()
-                })
+                utkastRadIdRef.current = lagretUtkast.id
+                synkUtkastMaterialerIbakgrunnen(
+                  lagretUtkast.id,
+                  firmaGrunnlag.id,
+                  materialraderSnapshot
+                )
+                utførLukkUtenLagring()
               } catch (e) {
                 console.error('[NyttTilbudModal] lagre utkast:', e)
                 Alert.alert('Kunne ikke lagre', 'Prøv igjen.')
@@ -437,6 +474,17 @@ export default function NyttTilbudModal({
     setBrukMaterialerITilbudstekst(false)
     setMaterialSpesifiseringRader([])
     setMaterialSpesifiseringAppliedSignature(null)
+
+    void hentTilbudMaterialer(utkastKilde.id)
+      .then(materialer => {
+        if (materialer.length > 0) {
+          setMaterialSpesifiseringRader(materialer)
+          if (harGyldigeMarkorer(utkastKilde.generertTekst ?? '')) {
+            setBrukMaterialerITilbudstekst(true)
+          }
+        }
+      })
+      .catch(e => console.error('[NyttTilbudModal] last utkast-materialer:', e))
 
     setKundeNavn('')
     setKundeTelefon('')
@@ -494,7 +542,7 @@ export default function NyttTilbudModal({
 
   function byggForhåndsvisningTekst(): string {
     if (!generertTekst) return ''
-    const baseTekst = fjernMaterialoversiktFraTilbudTekst(generertTekst)
+    const baseTekst = fjernMaterialSeksjon(fjernMaterialoversiktFraTilbudTekst(generertTekst))
     const baseTekstMedOppdatertPris = oppdaterPrislinjerITilbudstekst(baseTekst, {
       materialInklMva,
       arbeidInklMva,
@@ -508,15 +556,15 @@ export default function NyttTilbudModal({
           foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
         })
 
-    return brukMaterialerITilbudstekst
-      ? composeOfferTextWithMaterialOverview(finalisert, materialSpesifiseringRader)
+    return brukMaterialerITilbudstekst && harBrukbareMaterialrader(materialSpesifiseringRader)
+      ? leggInnMaterialSeksjon(finalisert, byggMaterialSeksjon(materialSpesifiseringRader))
       : finalisert
   }
 
   function lagreRedigering() {
-    const rensetTekst = fjernMaterialoversiktFraTilbudTekst(redigerbarTekst)
-    setGenerertTekst(rensetTekst)
-    setRåGenerertTekst(rensetTekst)
+    // Bevar teksten som brukeren har skrevet as-is.
+    setGenerertTekst(redigerbarTekst)
+    setRåGenerertTekst(redigerbarTekst)
     setRedigerModus(false)
   }
 
@@ -730,6 +778,12 @@ export default function NyttTilbudModal({
   }
 
   async function generer() {
+    if (!erMinimumFirmaprofilFullfort(firmaGrunnlag)) {
+      setGenerellFeil('Fullfør bedriftsprofil før du lager tilbud.')
+      onRequestFullforProfil?.()
+      return
+    }
+
     if (!valider()) {
       scrollRef.current?.scrollTo({ y: 0, animated: true })
       return
@@ -770,8 +824,10 @@ export default function NyttTilbudModal({
         setRåGenerertTekst(tekst)
         setGenerertTekst(fjernKortLinje(tekst))
       }
-    } catch {
-      setGenerellFeil('Feil ved generering. Prøv igjen.')
+    } catch (e) {
+      const melding = hentFeilmelding(e)
+      console.error('[NyttTilbudModal] generer tilbud:', e)
+      setGenerellFeil(`Kunne ikke generere tilbud: ${melding}`)
       setErGenerert(false)
     } finally {
       setIsGenerating(false)
@@ -818,7 +874,7 @@ export default function NyttTilbudModal({
 
     try {
       const sendtDato = new Date().toISOString()
-      const kildetekst = fjernMaterialoversiktFraTilbudTekst(råGenerertTekst || generertTekst)
+      const kildetekst = fjernMaterialSeksjon(fjernMaterialoversiktFraTilbudTekst(råGenerertTekst || generertTekst))
       const tekstUtenKortlinje = fjernKortLinje(kildetekst)
       const tekstMedOppdatertPris = oppdaterPrislinjerITilbudstekst(tekstUtenKortlinje, {
         materialInklMva,
@@ -830,8 +886,8 @@ export default function NyttTilbudModal({
         kundeNavn: kundeNavn.trim(),
         foreslattOppstartTekst: oppstartDato ? formaterOppstartDatoNb(oppstartDato) : undefined,
       })
-      const ferdigTekst = brukMaterialerITilbudstekst
-        ? composeOfferTextWithMaterialOverview(finalisertTekst, materialSpesifiseringRader)
+      const ferdigTekst = brukMaterialerITilbudstekst && harBrukbareMaterialrader(materialSpesifiseringRader)
+        ? leggInnMaterialSeksjon(finalisertTekst, byggMaterialSeksjon(materialSpesifiseringRader))
         : finalisertTekst
       const eksisterendeUtkastId = utkastRadIdRef.current
       let tilbudId: string
@@ -882,6 +938,8 @@ export default function NyttTilbudModal({
         tilbudId = lagret.id
         firmaIdSend = lagret.firmaId
         versjonSend = lagret.versjon ?? 1
+
+        await lagreAlleTilbudMaterialer(tilbudId, firmaIdSend, materialSpesifiseringRader)
       }
 
       await sendTilbudEpost({
@@ -1531,7 +1589,7 @@ export default function NyttTilbudModal({
                               style={styles.prisKompaktRadMeta}
                               numberOfLines={1}
                             >
-                              (+{Math.round(matPaslag)}%)
+                              (+{Math.round(matPaslag)}% Påslag)
                             </Text>
                           </View>
                           <Text
@@ -1590,6 +1648,7 @@ export default function NyttTilbudModal({
                         )}
                       </TouchableOpacity>
                     </Animated.View>
+                    {generellFeil ? <Text style={styles.footerFeilTekst}>{generellFeil}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -1862,15 +1921,29 @@ export default function NyttTilbudModal({
             <MaterialSpesifiseringScreen
               valgtTjeneste={valgtTjeneste}
               valgtMaterialkostnad={materiale}
+              materialPaslag={matPaslag}
               rader={materialSpesifiseringRader}
-              tilbudstekstHarMaterialoversikt={brukMaterialerITilbudstekst}
+              tilbudstekstHarMaterialoversikt={
+                brukMaterialerITilbudstekst || harGyldigeMarkorer(generertTekst)
+              }
               onClose={() => {
                 Keyboard.dismiss()
                 setVisMaterialSpesifisering(false)
               }}
-              onApplyMaterialsum={brukSpesifisertMaterialsum}
+              onApplyMaterialsum={(brukITilbudstekst) => {
+                brukSpesifisertMaterialsum(brukITilbudstekst)
+                setVisMaterialSpesifisering(false)
+              }}
               onDeleteRow={slettMaterialrad}
               onSaveRow={lagreMaterialrad}
+              onFjernFraTilbudstekst={
+                brukMaterialerITilbudstekst || harGyldigeMarkorer(generertTekst)
+                  ? () => {
+                      setBrukMaterialerITilbudstekst(false)
+                      setVisMaterialSpesifisering(false)
+                    }
+                  : undefined
+              }
             />
           </Modal>
 

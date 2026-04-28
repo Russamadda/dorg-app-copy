@@ -9,7 +9,11 @@ export default function AuthLayout() {
         contentStyle: { backgroundColor: '#E8EDF5' },
       }}
     >
-      <Stack.Screen name="index" />
+      <Stack.Screen name="velkommen" />
+      <Stack.Screen
+        name="index"
+        options={{ animation: 'slide_from_right' }}
+      />
       <Stack.Screen name="forgot-password" />
       <Stack.Screen name="login" />
       <Stack.Screen name="register" />

@@ -1,5 +1,6 @@
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
+import { fjernMaterialMarkorerForVisning } from '../lib/materialSeksjon'
 import { fjernKortLinje } from '../lib/tekstUtils'
 
 interface Props {
@@ -36,6 +37,16 @@ function erSeparatorLinje(linje: string) {
   return /^[─-]{5,}$/.test(linje)
 }
 
+function parseMaterialLinje(linje: string) {
+  const match = /^-\s+(.+?)\s[.\-·]{4,}\s(.+)$/.exec(linje)
+  if (!match) return null
+
+  return {
+    navn: match[1].trim(),
+    verdi: match[2].trim(),
+  }
+}
+
 export function TilbudsForhåndsvisning({
   tekst,
   isLoading = false,
@@ -69,7 +80,7 @@ export function TilbudsForhåndsvisning({
     )
   }
 
-  const linjer = fjernKortLinje(tekst).split('\n')
+  const linjer = fjernMaterialMarkorerForVisning(fjernKortLinje(tekst)).split('\n')
   const elements: React.ReactNode[] = []
   let key = 0
 
@@ -155,6 +166,26 @@ export function TilbudsForhåndsvisning({
         >
           {linje.slice(0, -1)}
         </Text>
+      )
+      continue
+    }
+
+    const materialLinje = parseMaterialLinje(linje)
+    if (materialLinje) {
+      elements.push(
+        <View key={key++} style={[styles.materialRad, doc && styles.materialRadDoc]}>
+          <Text style={[styles.bulletPunkt, erMork && styles.bulletPunktMork]}>·</Text>
+          <Text
+            style={[styles.materialNavn, erMork && styles.materialNavnMork, doc && styles.materialNavnMorkDoc]}
+            numberOfLines={2}
+          >
+            {materialLinje.navn}
+          </Text>
+          <View style={[styles.materialLeader, erMork && styles.materialLeaderMork]} />
+          <Text style={[styles.materialVerdi, erMork && styles.materialVerdiMork]}>
+            {materialLinje.verdi}
+          </Text>
+        </View>
       )
       continue
     }
@@ -442,6 +473,52 @@ const styles = StyleSheet.create({
   bulletTekstMorkDoc: {
     color: '#E8EDF4',
     lineHeight: 22,
+  },
+  materialRad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 7,
+    paddingLeft: 4,
+    paddingRight: 4,
+    gap: 8,
+  },
+  materialRadDoc: {
+    marginBottom: 8,
+  },
+  materialNavn: {
+    fontSize: 13,
+    fontFamily: 'DMSans_400Regular',
+    color: '#374151',
+    lineHeight: 20,
+    flexShrink: 1,
+  },
+  materialNavnMork: {
+    color: '#D6DBE3',
+  },
+  materialNavnMorkDoc: {
+    color: '#E8EDF4',
+  },
+  materialLeader: {
+    flex: 1,
+    minWidth: 18,
+    borderBottomWidth: 1,
+    borderStyle: 'dashed',
+    borderBottomColor: 'rgba(17,24,39,0.24)',
+    marginTop: 1,
+  },
+  materialLeaderMork: {
+    borderBottomColor: 'rgba(226,232,240,0.24)',
+  },
+  materialVerdi: {
+    fontSize: 13,
+    fontFamily: 'DMSans_500Medium',
+    color: '#111827',
+    lineHeight: 20,
+    minWidth: 56,
+    textAlign: 'right',
+  },
+  materialVerdiMork: {
+    color: '#F5F7FA',
   },
   metaRad: {
     flexDirection: 'row',

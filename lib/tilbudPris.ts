@@ -7,8 +7,33 @@ interface TilbudPrisGrunnlag {
   materialPaslag?: number
 }
 
-export function rundTilNarmeste500(pris: number): number {
-  return Math.round(pris / 500) * 500
+export function rundOppTilNarmeste100(pris: number): number {
+  return Math.ceil(pris / 100) * 100
+}
+
+export function beregnMaterialPrisDetaljer({
+  materialkostnad = 0,
+  materialPaslag = 15,
+}: {
+  materialkostnad?: number
+  materialPaslag?: number
+}): {
+  registrertEksMva: number
+  paslagBelop: number
+  materialerEksMva: number
+  materialerInklMva: number
+} {
+  const registrertEksMva = Math.round(materialkostnad)
+  const paslagBelop = Math.round(registrertEksMva * (materialPaslag / 100))
+  const materialerEksMva = registrertEksMva + paslagBelop
+  const materialerInklMva = rundOppTilNarmeste100(materialerEksMva * 1.25)
+
+  return {
+    registrertEksMva,
+    paslagBelop,
+    materialerEksMva,
+    materialerInklMva,
+  }
 }
 
 export function beregnTilbudPrisLinjer({
@@ -30,12 +55,14 @@ export function beregnTilbudPrisLinjer({
   totalInklMva: number
 } {
   const arbeidEksMva = Math.round(timer * timepris)
-  const materialerEksMva = Math.round(materialkostnad * (1 + materialPaslag / 100))
+  const { materialerEksMva, materialerInklMva } = beregnMaterialPrisDetaljer({
+    materialkostnad,
+    materialPaslag,
+  })
   const totalEksMva = arbeidEksMva + materialerEksMva
 
-  const arbeidInklMva = rundTilNarmeste500(arbeidEksMva * 1.25)
-  const materialerInklMva = rundTilNarmeste500(materialerEksMva * 1.25)
-  const totalInklMva = rundTilNarmeste500(totalEksMva * 1.25)
+  const arbeidInklMva = rundOppTilNarmeste100(arbeidEksMva * 1.25)
+  const totalInklMva = rundOppTilNarmeste100(totalEksMva * 1.25)
 
   return {
     arbeidEksMva,
@@ -80,5 +107,5 @@ export function beregnTilbudTotalInklMva({
     }).totalInklMva
   }
 
-  return rundTilNarmeste500(prisEksMva * 1.25)
+  return rundOppTilNarmeste100(prisEksMva * 1.25)
 }

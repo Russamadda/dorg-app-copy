@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { Platform, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import Slider from '@react-native-community/slider'
@@ -84,10 +84,10 @@ export function OppdaterGrunnlag({
         />
       ) : (
         <SliderRow
-          label="Material"
+          label="Material eks. mva"
           value={material.toLocaleString('nb-NO')}
           unit="kr"
-          hint={`+${materialPaslag} % påslag`}
+          hint={`(+${materialPaslag}% Påslag)`}
           minimumValue={0}
           maximumValue={60000}
           step={500}
@@ -111,7 +111,7 @@ function LockedMaterialRow({
       <View style={styles.rowHead}>
         <View style={styles.valueWrap}>
           <View style={styles.labelRow}>
-            <Text style={styles.label}>Material</Text>
+            <Text style={styles.label}>Material eks. mva</Text>
             <Ionicons name="lock-closed" size={12} color="rgba(255,255,255,0.55)" />
           </View>
           <Text style={styles.value}>
@@ -123,6 +123,7 @@ function LockedMaterialRow({
       </View>
 
       <Slider
+        key={`locked-material-${currentValue}`}
         style={[styles.slider, { opacity: 0.4 }]}
         minimumValue={0}
         maximumValue={60000}
@@ -158,12 +159,6 @@ function SliderRow({
   currentValue: number
   onChange: (value: number) => void
 }) {
-  const [sliderValue, setSliderValue] = useState(currentValue)
-
-  useEffect(() => {
-    setSliderValue(currentValue)
-  }, [currentValue])
-
   return (
     <View style={styles.row}>
       <View style={styles.rowHead}>
@@ -182,11 +177,8 @@ function SliderRow({
         minimumValue={minimumValue}
         maximumValue={maximumValue}
         step={step}
-        value={sliderValue}
-        onValueChange={(v) => {
-          setSliderValue(v)
-          onChange(v)
-        }}
+        value={currentValue}
+        onValueChange={onChange}
         minimumTrackTintColor={GREEN}
         maximumTrackTintColor={TRACK_BG}
         thumbTintColor={THUMB}

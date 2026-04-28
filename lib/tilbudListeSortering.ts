@@ -37,3 +37,25 @@ export function sorterTilbudForSendtListe(a: Forespørsel, b: Forespørsel): num
 
   return hentTilbudSorteringsTidsstempel(b) - hentTilbudSorteringsTidsstempel(a)
 }
+
+function hentGodkjentSorteringsTidsstempel(t: Forespørsel): number {
+  const datoer = [
+    t.godkjentDato,
+    t.sistOppdatertDato,
+    t.sistSendtDato,
+    t.sendtDato,
+    t.opprettetDato,
+  ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+
+  for (const dato of datoer) {
+    const ms = new Date(dato).getTime()
+    if (!Number.isNaN(ms)) return ms
+  }
+
+  return 0
+}
+
+/** Godkjent-filteret skal prioritere nyeste godkjenning, ikke generell sendeliste-gruppering. */
+export function sorterGodkjenteTilbudNyestFørst(a: Forespørsel, b: Forespørsel): number {
+  return hentGodkjentSorteringsTidsstempel(b) - hentGodkjentSorteringsTidsstempel(a)
+}

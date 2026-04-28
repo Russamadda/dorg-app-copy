@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
-import { useLocalSearchParams } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import Animated, {
   Easing,
   KeyboardState,
@@ -14,7 +14,6 @@ import Animated, {
 import AuthBrandHeader from '../../components/auth/AuthBrandHeader'
 import AuthCardStage, { type AuthStagePanel } from '../../components/auth/AuthCardStage'
 import AuthShell from '../../components/auth/AuthShell'
-import AuthSegmentedControl, { type AuthMode } from '../../components/auth/AuthSegmentedControl'
 import AuthTextField from '../../components/auth/AuthTextField'
 import AuthPrimaryButton from '../../components/auth/AuthPrimaryButton'
 import { authOnboardingColors } from '../../constants/authOnboardingTheme'
@@ -24,20 +23,14 @@ import {
   normaliserEpost,
   oversettAuthFeil,
 } from '../../lib/auth'
-import { sikreFirmaForBruker, supabase } from '../../lib/supabase'
+import { supabase } from '../../lib/supabase'
 
 type FieldErrors = {
   epost?: string
   passord?: string
-  bekreftPassord?: string
 }
 
-const AUTH_STAGE_HEIGHT = 520
-
-function parseInitialMode(raw: string | string[] | undefined): AuthMode {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  return value === 'register' ? 'register' : 'login'
-}
+const AUTH_STAGE_HEIGHT = 440
 
 function parseInitialPanel(raw: string | string[] | undefined): AuthStagePanel {
   const value = Array.isArray(raw) ? raw[0] : raw
@@ -45,27 +38,19 @@ function parseInitialPanel(raw: string | string[] | undefined): AuthStagePanel {
 }
 
 export default function AuthEntryScreen() {
-  const { mode: modeParam, panel: panelParam } = useLocalSearchParams<{
-    mode?: string | string[]
-    panel?: string | string[]
-  }>()
+  const router = useRouter()
+  const { panel: panelParam } = useLocalSearchParams<{ panel?: string | string[] }>()
 
-  const [mode, setMode] = useState<AuthMode>(() => parseInitialMode(modeParam))
   const [panel, setPanel] = useState<AuthStagePanel>(() => parseInitialPanel(panelParam))
 
   const passwordRef = useRef<TextInput>(null)
-  const confirmPasswordRef = useRef<TextInput>(null)
   const keyboard = useAnimatedKeyboard()
-
-  const modeProgress = useSharedValue(mode === 'register' ? 1 : 0)
   const subtitleProgress = useSharedValue(panel === 'forgot' ? 1 : 0)
 
   const [epost, setEpost] = useState('')
   const [passord, setPassord] = useState('')
-  const [bekreftPassord, setBekreftPassord] = useState('')
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [submitError, setSubmitError] = useState('')
-  const [info, setInfo] = useState<string | null>(null)
   const [laster, setLaster] = useState(false)
 
   const [resetEpost, setResetEpost] = useState('')
@@ -74,27 +59,11 @@ export default function AuthEntryScreen() {
   const [resetInfo, setResetInfo] = useState<string | null>(null)
   const [resetLaster, setResetLaster] = useState(false)
 
-  function animateMode(next: AuthMode) {
-    modeProgress.value = withTiming(next === 'register' ? 1 : 0, {
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-    })
-  }
-
   function animateSubtitle(nextPanel: AuthStagePanel) {
     subtitleProgress.value = withTiming(nextPanel === 'forgot' ? 1 : 0, {
       duration: 180,
       easing: Easing.out(Easing.cubic),
     })
-  }
-
-  function switchMode(next: AuthMode) {
-    if (next === mode) return
-    setMode(next)
-    animateMode(next)
-    setFieldErrors({})
-    setSubmitError('')
-    setInfo(null)
   }
 
   function openForgotPassword() {
@@ -112,19 +81,6 @@ export default function AuthEntryScreen() {
     animateSubtitle('auth')
   }
 
-  const signupFieldAnimatedStyle = useAnimatedStyle(() => ({
-    height: interpolate(modeProgress.value, [0, 1], [0, 84]),
-    opacity: modeProgress.value,
-    marginBottom: interpolate(modeProgress.value, [0, 1], [0, 18]),
-    transform: [{ translateY: interpolate(modeProgress.value, [0, 1], [-10, 0]) }],
-  }))
-
-  const forgotLinkAnimatedStyle = useAnimatedStyle(() => ({
-    height: interpolate(modeProgress.value, [0, 1], [46, 0]),
-    opacity: interpolate(modeProgress.value, [0, 1], [1, 0]),
-    transform: [{ translateY: interpolate(modeProgress.value, [0, 1], [0, -8]) }],
-  }))
-
   const mainSubtitleAnimatedStyle = useAnimatedStyle(() => ({
     opacity: 1 - subtitleProgress.value,
   }))
@@ -137,19 +93,17 @@ export default function AuthEntryScreen() {
     const keyboardVisible =
       keyboard.state.value === KeyboardState.OPEN ||
       keyboard.state.value === KeyboardState.OPENING
-    const shouldLiftHero = keyboardVisible && panel === 'auth' && mode === 'register'
-
     return {
       transform: [
         {
-          translateY: withTiming(shouldLiftHero ? -58 : 0, {
+          translateY: withTiming(keyboardVisible && panel === 'auth' ? -48 : 0, {
             duration: 150,
             reduceMotion: ReduceMotion.System,
           }),
         },
       ],
     }
-  }, [keyboard.state, mode, panel])
+  }, [keyboard.state, panel])
 
   function validerSkjema(): boolean {
     const nesteFeil: FieldErrors = {}
@@ -162,16 +116,6 @@ export default function AuthEntryScreen() {
 
     if (!passord.trim()) {
       nesteFeil.passord = 'Skriv inn passord.'
-    } else if (mode === 'register' && passord.length < 6) {
-      nesteFeil.passord = 'Passordet må være minst 6 tegn.'
-    }
-
-    if (mode === 'register') {
-      if (!bekreftPassord.trim()) {
-        nesteFeil.bekreftPassord = 'Bekreft passordet ditt.'
-      } else if (bekreftPassord !== passord) {
-        nesteFeil.bekreftPassord = 'Passordene stemmer ikke overens.'
-      }
     }
 
     setFieldErrors(nesteFeil)
@@ -184,7 +128,6 @@ export default function AuthEntryScreen() {
     }
 
     setSubmitError('')
-    setInfo(null)
     setLaster(true)
 
     try {
@@ -196,59 +139,6 @@ export default function AuthEntryScreen() {
       if (error) {
         setSubmitError(oversettAuthFeil(error.message))
       }
-    } catch (error) {
-      setSubmitError(oversettAuthFeil(error instanceof Error ? error.message : null))
-    } finally {
-      setLaster(false)
-    }
-  }
-
-  async function registrer() {
-    if (!validerSkjema()) {
-      return
-    }
-
-    setSubmitError('')
-    setInfo(null)
-    setLaster(true)
-
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: normaliserEpost(epost),
-        password: passord,
-      })
-
-      if (error) {
-        setSubmitError(oversettAuthFeil(error.message))
-        return
-      }
-
-      if (!data.session) {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: normaliserEpost(epost),
-          password: passord,
-        })
-
-        if (signInError) {
-          const melding = oversettAuthFeil(signInError.message)
-          if (melding.toLowerCase().includes('bekreftet')) {
-            setInfo('Kontoen er opprettet. Bekreft e-posten din før du kan logge inn.')
-            return
-          }
-          setSubmitError(melding)
-          return
-        }
-      }
-
-      if (data.user) {
-        try {
-          await sikreFirmaForBruker(data.user.id)
-        } catch (error) {
-          console.warn('[auth] sikreFirmaForBruker feilet, onboarding får opprette rad senere:', error)
-        }
-      }
-
-      setInfo('Konto opprettet. Vi sender deg videre til oppsettet.')
     } catch (error) {
       setSubmitError(oversettAuthFeil(error instanceof Error ? error.message : null))
     } finally {
@@ -292,8 +182,6 @@ export default function AuthEntryScreen() {
 
   const authCard = (
     <View style={styles.card}>
-      <AuthSegmentedControl mode={mode} onChange={switchMode} />
-
       <View>
         <AuthTextField
           label="E-post"
@@ -320,86 +208,35 @@ export default function AuthEntryScreen() {
           value={passord}
           onChangeText={text => {
             setPassord(text)
-            if (fieldErrors.passord || fieldErrors.bekreftPassord) {
-              setFieldErrors(current => ({
-                ...current,
-                passord: undefined,
-                bekreftPassord:
-                  mode === 'register' && bekreftPassord && bekreftPassord !== text
-                    ? 'Passordene stemmer ikke overens.'
-                    : undefined,
-              }))
+            if (fieldErrors.passord) {
+              setFieldErrors(current => ({ ...current, passord: undefined }))
             }
           }}
           error={fieldErrors.passord}
-          placeholder={mode === 'login' ? 'Skriv inn passordet ditt' : 'Minst 6 tegn'}
+          placeholder="Skriv inn passordet ditt"
           secureTextEntry
           secureToggle
-          textContentType={mode === 'login' ? 'password' : 'newPassword'}
-          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+          textContentType="password"
+          autoComplete="current-password"
           autoCapitalize="none"
-          returnKeyType={mode === 'login' ? 'go' : 'next'}
-          onSubmitEditing={() => {
-            if (mode === 'login') {
-              void loggInn()
-              return
-            }
-            confirmPasswordRef.current?.focus()
-          }}
+          returnKeyType="go"
+          onSubmitEditing={() => void loggInn()}
         />
 
-        <Animated.View
-          pointerEvents={mode === 'register' ? 'auto' : 'none'}
-          style={[styles.collapsibleField, signupFieldAnimatedStyle]}
-        >
-          <AuthTextField
-            ref={confirmPasswordRef}
-            label="Bekreft passord"
-            value={bekreftPassord}
-            onChangeText={text => {
-              setBekreftPassord(text)
-              if (fieldErrors.bekreftPassord) {
-                setFieldErrors(current => ({ ...current, bekreftPassord: undefined }))
-              }
-            }}
-            error={fieldErrors.bekreftPassord}
-            placeholder="Gjenta passordet"
-            secureTextEntry
-            secureToggle
-            textContentType="none"
-            autoComplete="off"
-            autoCapitalize="none"
-            returnKeyType="go"
-            onSubmitEditing={() => void registrer()}
-          />
-        </Animated.View>
-
-        {info ? <Text style={styles.info}>{info}</Text> : null}
         {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
 
         <AuthPrimaryButton
-          label={mode === 'login' ? 'Logg inn' : 'Opprett konto'}
-          onPress={() => {
-            if (mode === 'login') {
-              void loggInn()
-              return
-            }
-            void registrer()
-          }}
+          label="Logg inn"
+          onPress={() => void loggInn()}
           loading={laster}
           style={styles.submitButton}
         />
 
-        <Animated.View
-          pointerEvents={mode === 'login' ? 'auto' : 'none'}
-          style={[styles.forgotWrap, forgotLinkAnimatedStyle]}
-        >
-          <View style={styles.forgotAfterCta}>
-            <Pressable onPress={openForgotPassword}>
-              <Text style={styles.inlineLink}>Glemt passord?</Text>
-            </Pressable>
-          </View>
-        </Animated.View>
+        <View style={styles.forgotAfterCta}>
+          <Pressable onPress={openForgotPassword}>
+            <Text style={styles.inlineLink}>Glemt passord?</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   )
@@ -443,6 +280,22 @@ export default function AuthEntryScreen() {
   return (
     <AuthShell scroll={false}>
       <View style={styles.content}>
+        <Pressable
+          style={styles.backButton}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back()
+            } else {
+              router.replace('/auth/velkommen')
+            }
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityLabel="Tilbake til velkomstskjermen"
+          accessibilityRole="button"
+        >
+          <Text style={styles.backButtonText}>‹</Text>
+        </Pressable>
+
         <Animated.View style={[styles.hero, heroKeyboardAnimatedStyle]}>
           <AuthBrandHeader />
           <View style={styles.descriptionWrap}>
@@ -464,7 +317,7 @@ export default function AuthEntryScreen() {
           authCard={authCard}
           forgotCard={forgotCard}
           fallbackHeight={AUTH_STAGE_HEIGHT}
-          keyboardLift={panel === 'auth' && mode === 'register' ? 140 : 85}
+          keyboardLift={120}
           style={styles.stage}
         />
       </View>
@@ -520,9 +373,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 0,
   },
-  collapsibleField: {
-    overflow: 'hidden',
-  },
   forgotAfterCta: {
     alignItems: 'center',
     paddingTop: 14,
@@ -532,9 +382,6 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_500Medium',
     fontSize: 14,
     color: authOnboardingColors.cta,
-  },
-  forgotWrap: {
-    overflow: 'hidden',
   },
   info: {
     marginBottom: 8,
@@ -576,5 +423,18 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_500Medium',
     fontSize: 14,
     color: authOnboardingColors.textMuted,
+  },
+  backButton: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 10,
+    padding: 4,
+  },
+  backButtonText: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 30,
+    color: '#111111',
+    lineHeight: 36,
   },
 })

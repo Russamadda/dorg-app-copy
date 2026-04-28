@@ -17,9 +17,7 @@ export function skalVisePillJustering(liste: Forespørsel[], justeringAckAt: num
 }
 
 export function skalVisePillGodkjent(liste: Forespørsel[], godkjentAckAt: number): boolean {
-  return liste.some(
-    t => t.status === 'godkjent' && hentPillTriggerMs(t, 'godkjent') > godkjentAckAt
-  )
+  return liste.some(t => t.status === 'godkjent' && !t.settSomLest)
 }
 
 export function antallUhandterteJusteringer(liste: Forespørsel[]): number {
@@ -36,7 +34,7 @@ export function antallKreverHandling(liste: Forespørsel[]): number {
 
 /** Kort med puls/kant så lenge status er justering eller godkjent (til utført / nytt sendt). */
 export function tilbudTrengerHandlingGlow(t: Forespørsel): boolean {
-  return t.status === 'justering' || t.status === 'godkjent'
+  return t.status === 'justering' || (t.status === 'godkjent' && !t.settSomLest)
 }
 
 export function byggHandlingSjefHint(liste: Forespørsel[]): string | null {

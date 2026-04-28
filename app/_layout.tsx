@@ -224,7 +224,7 @@ export default function RootLayout() {
 
     if (!session) {
       if (!inAuth) {
-        router.replace('/auth')
+        router.replace('/auth/velkommen')
       }
       return
     }

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createClient, type Session } from '@supabase/supabase-js'
 import { clearCachedFirma } from './firmaCache'
+import { byggMaterialSpesifiseringRad, type MaterialSpesifiseringRad } from './materialSpesifisering'
 import type {
   Forespørsel,
   Firma,
@@ -374,18 +375,33 @@ async function opprettTilbudHendelse(payload: TilbudHendelsePayload) {
 }
 
 export async function hentTilbudHendelser(tilbudId: string): Promise<TilbudHendelse[]> {
-  const { data, error } = await supabase
-    .from('tilbud_hendelser')
-    .select('*')
-    .eq('tilbud_id', tilbudId)
-    .order('opprettet_dato', { ascending: true })
+  let result
+  try {
+    result = await supabase
+      .from('tilbud_hendelser')
+      .select('*')
+      .eq('tilbud_id', tilbudId)
+      .order('opprettet_dato', { ascending: true })
+  } catch (error) {
+    console.warn('[supabase] Kunne ikke hente tilbud_hendelser, bruker tom historikk', {
+      tilbudId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+
+  const { data, error } = result
 
   if (error) {
     if (erManglendeTabellFeil(error, 'tilbud_hendelser')) {
       return []
     }
 
-    throw new Error(error.message)
+    console.warn('[supabase] Kunne ikke hente tilbud_hendelser, bruker tom historikk', {
+      tilbudId,
+      error: error.message,
+    })
+    return []
   }
 
   return (data as TilbudHendelseRad[]).map(fraTilbudHendelseRad)
@@ -1001,6 +1017,127 @@ export async function lastOppLogo(
     .eq('user_id', userId)
 
   return publicUrl
+}
+
+type TilbudMaterialRad = {
+  id: string
+  navn: string
+  antall: number
+  enhet: string | null
+  pris_per_enhet: number
+  sortering: number
+}
+
+export async function hentTilbudMaterialer(tilbudId: string): Promise<MaterialSpesifiseringRad[]> {
+  const { data, error } = await supabase
+    .from('tilbud_materialer')
+    .select('id, navn, antall, enhet, pris_per_enhet, sortering')
+    .eq('tilbud_id', tilbudId)
+    .order('sortering', { ascending: true })
+
+  if (error) {
+    if (erManglendeTabellFeil(error, 'tilbud_materialer')) return []
+    throw new Error(error.message)
+  }
+
+  return (data as TilbudMaterialRad[]).map(rad =>
+    byggMaterialSpesifiseringRad({
+      id: rad.id,
+      navn: rad.navn,
+      enhet: rad.enhet ?? 'stk',
+      antall: rad.antall,
+      prisPerEnhet: rad.pris_per_enhet,
+    })
+  )
+}
+
+export async function lagreTilbudMaterial(
+  tilbudId: string,
+  firmaId: string,
+  rad: MaterialSpesifiseringRad,
+  sortering: number
+): Promise<string> {
+  const erNy = rad.id.startsWith('mat-')
+
+  if (erNy) {
+    const { data, error } = await supabase
+      .from('tilbud_materialer')
+      .insert({
+        tilbud_id: tilbudId,
+        firma_id: firmaId,
+        navn: rad.navn,
+        antall: rad.antall,
+        enhet: rad.enhet,
+        pris_per_enhet: rad.prisPerEnhet,
+        sortering,
+      })
+      .select('id')
+      .single()
+
+    if (error) throw new Error(error.message)
+    return (data as { id: string }).id
+  }
+
+  const { error } = await supabase
+    .from('tilbud_materialer')
+    .update({
+      navn: rad.navn,
+      antall: rad.antall,
+      enhet: rad.enhet,
+      pris_per_enhet: rad.prisPerEnhet,
+      sortering,
+    })
+    .eq('id', rad.id)
+
+  if (error) throw new Error(error.message)
+  return rad.id
+}
+
+export async function slettTilbudMaterial(id: string): Promise<void> {
+  if (id.startsWith('mat-')) return
+  const { error } = await supabase
+    .from('tilbud_materialer')
+    .delete()
+    .eq('id', id)
+
+  if (error) throw new Error(error.message)
+}
+
+export async function slettAlleTilbudMaterialer(tilbudId: string): Promise<void> {
+  const { error } = await supabase
+    .from('tilbud_materialer')
+    .delete()
+    .eq('tilbud_id', tilbudId)
+
+  if (error) {
+    if (erManglendeTabellFeil(error, 'tilbud_materialer')) return
+    throw new Error(error.message)
+  }
+}
+
+export async function lagreAlleTilbudMaterialer(
+  tilbudId: string,
+  firmaId: string,
+  rader: MaterialSpesifiseringRad[]
+): Promise<void> {
+  if (!rader.length) return
+
+  const rows = rader.map((rad, index) => ({
+    tilbud_id: tilbudId,
+    firma_id: firmaId,
+    navn: rad.navn,
+    antall: rad.antall,
+    enhet: rad.enhet,
+    pris_per_enhet: rad.prisPerEnhet,
+    sortering: index,
+  }))
+
+  const { error } = await supabase.from('tilbud_materialer').insert(rows)
+
+  if (error) {
+    if (erManglendeTabellFeil(error, 'tilbud_materialer')) return
+    throw new Error(error.message)
+  }
 }
 
 export async function loggUt(): Promise<void> {

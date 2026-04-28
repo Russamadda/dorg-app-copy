@@ -29,18 +29,21 @@ import {
   hentFirma,
   hentLokalAuthSession,
   slettTilbud,
+  markerSomLest,
 } from '../../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../../lib/firmaCache'
+import { erMinimumFirmaprofilFullfort } from '../../lib/firmaSetup'
 import { fabEmitter } from '../../lib/fabEmitter'
 import { oppdaterBadge } from '../../lib/notificationState'
 import { beregnTilbudTotalInklMva } from '../../lib/tilbudPris'
 import { prefetchTilbudHendelser } from '../../lib/tilbudHendelserCache'
-import { sorterTilbudForSendtListe } from '../../lib/tilbudListeSortering'
+import { sorterGodkjenteTilbudNyestFørst, sorterTilbudForSendtListe } from '../../lib/tilbudListeSortering'
 import type { Forespørsel, Firma } from '../../types'
 import NotificationBadge from '../../components/NotificationBadge'
 import TopBar, { getTopBarOuterHeight } from '../../components/TopBar'
 import TilbudKort from '../../components/TilbudKort'
 import NyttTilbudModal from '../../components/NyttTilbudModal'
+import FullforBedriftsprofilModal from '../../components/FullforBedriftsprofilModal'
 import TilbudDetaljerModal from '../../components/TilbudDetaljerModal'
 import { Toast } from '../../components/Toast'
 import { getFloatingTabBarPadding } from '../../components/FloatingTabBar'
@@ -67,7 +70,7 @@ import {
 import { hentTilbudPillAck, lagreTilbudPillAckDel } from '../../lib/tilbudPillAckStorage'
 import { Colors } from '../../constants/colors'
 
-type FilterLabel = 'Sendt' | 'Justering' | 'Godkjent' | 'Alle'
+type FilterLabel = 'Sendt' | 'Justering' | 'Godkjent' | 'Utført' | 'Alle'
 
 type SwipeListItem = Forespørsel & {
   rowKey: string
@@ -83,14 +86,76 @@ const SWIPE_TO_OPEN_PERCENT = 40
 const SWIPE_TO_CLOSE_PERCENT = 42
 const DIRECTION_THRESHOLD = 5
 
-const FILTRE: FilterLabel[] = ['Sendt', 'Justering', 'Godkjent', 'Alle']
+const FILTRE: FilterLabel[] = ['Sendt', 'Justering', 'Godkjent', 'Utført', 'Alle']
 
 const filterStatuser: Record<FilterLabel, string[] | null> = {
+  Utført: ['utfort'],
   Sendt: ['sendt', 'paminnelse_sendt', 'siste_paminnelse_sendt'],
   Justering: ['justering'],
   Godkjent: ['godkjent'],
   Alle: null,
 }
+
+// TEMP DEMO DATA - remove after screenshot
+// Slett hele denne blokken + linjen med TEMP_DEMO_TILBUD i hentTilbud-funksjonen
+const _makeDemoTilbud = (): Forespørsel[] => {
+  const nå = Date.now()
+  const dagSiden = (n: number) => new Date(nå - n * 24 * 60 * 60 * 1000).toISOString()
+  return [
+    {
+      id: '__demo_gulvbytte__',
+      kundeNavn: 'Kari Hansen',
+      kundeEpost: 'demo@example.com',
+      jobbBeskrivelse: 'Gulvbytte i stue og gang, ca. 60 kvm parkett',
+      kortBeskrivelse: 'Gulvbytte',
+      adresse: 'Åsane, Bergen',
+      prisEksMva: 38800,
+      status: 'sendt',
+      opprettetDato: dagSiden(0),
+      sendtDato: dagSiden(0),
+      forsteSendtDato: dagSiden(0),
+      sistSendtDato: dagSiden(0),
+      firmaId: '__demo__',
+      jobbType: 'Gulvbytte',
+    },
+    {
+      id: '__demo_kjokkenmontering__',
+      kundeNavn: 'Thomas Nilsen',
+      kundeEpost: 'demo@example.com',
+      jobbBeskrivelse: 'Montering av nytt IKEA-kjøkken inkl. hvitevarer',
+      kortBeskrivelse: 'Kjøkkenmontering',
+      adresse: 'Fana, Bergen',
+      prisEksMva: 69520,
+      status: 'sendt',
+      opprettetDato: dagSiden(3),
+      sendtDato: dagSiden(3),
+      forsteSendtDato: dagSiden(3),
+      sistSendtDato: dagSiden(3),
+      firmaId: '__demo__',
+      jobbType: 'Kjøkkenmontering',
+    },
+    {
+      id: '__demo_takrenovering__',
+      kundeNavn: 'Ingrid Berg',
+      kundeEpost: 'demo@example.com',
+      jobbBeskrivelse: 'Totalrenovering av tak inkl. ny isolasjon og taktekking',
+      kortBeskrivelse: 'Takrenovering',
+      adresse: 'Kalfaret, Bergen',
+      prisEksMva: 113600,
+      status: 'paminnelse_sendt',
+      opprettetDato: dagSiden(7),
+      sendtDato: dagSiden(7),
+      forsteSendtDato: dagSiden(7),
+      sistSendtDato: dagSiden(7),
+      forstePaminnelseSendtDato: dagSiden(4),
+      antallPaminnelser: 1,
+      firmaId: '__demo__',
+      jobbType: 'Takrenovering',
+    },
+  ]
+}
+const TEMP_DEMO_TILBUD = _makeDemoTilbud()
+// END TEMP DEMO DATA
 
 const listAnimationConfig = {
   duration: 220,
@@ -115,7 +180,10 @@ function filtrerTilbudEtterValgtFilter(liste: Forespørsel[], filter: FilterLabe
   }
 
   if (Array.isArray(aktivtFilter)) {
-    return liste.filter(item => aktivtFilter.includes(item.status)).sort(sorterTilbudForSendtListe)
+    const filtrert = liste.filter(item => aktivtFilter.includes(item.status))
+    return filter === 'Godkjent'
+      ? filtrert.sort(sorterGodkjenteTilbudNyestFørst)
+      : filtrert.sort(sorterTilbudForSendtListe)
   }
 
   return liste.filter(item => item.status === aktivtFilter).sort(sorterTilbudForSendtListe)
@@ -191,6 +259,7 @@ export default function TilbudScreen() {
     melding: string
     type: 'suksess' | 'feil'
   }>({ synlig: false, melding: '', type: 'suksess' })
+  const [visProfilBlokkering, setVisProfilBlokkering] = useState(false)
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -201,6 +270,24 @@ export default function TilbudScreen() {
   const visToast = useCallback((melding: string, type: 'suksess' | 'feil' = 'suksess') => {
     setToast({ synlig: true, melding, type })
   }, [])
+
+  const håndterStartNyttTilbud = useCallback(() => {
+    if (!erMinimumFirmaprofilFullfort(firma)) {
+      setVisProfilBlokkering(true)
+      return
+    }
+
+    tilbudFlyt.fabTrykket()
+  }, [firma, tilbudFlyt.fabTrykket])
+
+  const håndterFullforProfil = useCallback(() => {
+    setVisProfilBlokkering(false)
+    tilbudFlyt.lukkModal()
+    router.push({
+      pathname: '/bedrift',
+      params: { openProfile: String(Date.now()) },
+    })
+  }, [router, tilbudFlyt.lukkModal])
 
   useEffect(() => {
     tilbudRef.current = tilbud
@@ -222,9 +309,9 @@ export default function TilbudScreen() {
       setCachedFirma(firmaData)
       if (firmaData) {
         const data = await hentSendteTilbud(firmaData.id)
-        setTilbud(data)
+        setTilbud([...TEMP_DEMO_TILBUD, ...data]) // TEMP DEMO DATA - remove after screenshot
       } else {
-        setTilbud([])
+        setTilbud([...TEMP_DEMO_TILBUD]) // TEMP DEMO DATA - remove after screenshot
       }
     } catch (err) {
       console.error(err)
@@ -254,10 +341,10 @@ export default function TilbudScreen() {
   useEffect(() => {
     return fabEmitter.on(aktivRute => {
       if (aktivRute === 'tilbud') {
-        tilbudFlyt.fabTrykket()
+        håndterStartNyttTilbud()
       }
     })
-  }, [tilbudFlyt.fabTrykket])
+  }, [håndterStartNyttTilbud])
 
   useEffect(() => {
     if (openServicePickerParam !== '1') {
@@ -271,15 +358,15 @@ export default function TilbudScreen() {
     sisteHåndterteServicePickerNonceRef.current = nonce
 
     // Åpner "Velg tjeneste" direkte når man kommer fra onboarding-complete.
-    tilbudFlyt.fabTrykket()
+    håndterStartNyttTilbud()
 
     router.replace('/(tabs)/tilbud')
-  }, [openServicePickerParam, router, tilbudFlyt.fabTrykket, tilbudOpenNonce])
+  }, [openServicePickerParam, router, håndterStartNyttTilbud, tilbudOpenNonce])
 
   useEffect(() => {
     if (!isOfferFlowRecordingDemoEnabled()) return
     return registerOfferFlowDemoTilbudOpenHandler(() => {
-      tilbudFlyt.fabTrykket()
+      håndterStartNyttTilbud()
       setOpptaksDemoAutoVelg({
         tjeneste: OFFER_FLOW_DEMO_TJENESTE,
         utsettMs: OFFER_FLOW_DEMO_TJENESTE_SHEET_PAUSE_MS,
@@ -287,7 +374,7 @@ export default function TilbudScreen() {
         highlightFørLukkMs: OFFER_FLOW_DEMO_TJENESTE_HIGHLIGHT_MS,
       })
     })
-  }, [tilbudFlyt.fabTrykket])
+  }, [håndterStartNyttTilbud])
 
   const håndterOpptaksDetaljerDemoScrollFerdig = useCallback(() => {
     setOpptaksDetaljerDemoscroll(false)
@@ -298,6 +385,11 @@ export default function TilbudScreen() {
       const fraDemoOpptak = velgKommerFraDemoOpptakRef.current
       velgKommerFraDemoOpptakRef.current = false
       setOpptaksDemoAutoVelg(null)
+      if (!erMinimumFirmaprofilFullfort(firma)) {
+        tilbudFlyt.lukkTjenesteSheet()
+        setVisProfilBlokkering(true)
+        return
+      }
       if (fraDemoOpptak) {
         setTimeout(() => {
           tilbudFlyt.onTjenesteValgt(tjeneste)
@@ -306,7 +398,7 @@ export default function TilbudScreen() {
         tilbudFlyt.onTjenesteValgt(tjeneste)
       }
     },
-    [tilbudFlyt.onTjenesteValgt]
+    [firma, tilbudFlyt.lukkTjenesteSheet, tilbudFlyt.onTjenesteValgt]
   )
 
   const håndterSlettTilbud = useCallback(
@@ -392,6 +484,26 @@ export default function TilbudScreen() {
 
   const håndterFilterTrykk = useCallback(
     (filter: FilterLabel) => {
+      if (aktivFilter === 'Godkjent' && filter !== 'Godkjent') {
+        const usetteGodkjenteIds = filtrert
+          .filter(item => item.status === 'godkjent' && !item.settSomLest)
+          .map(item => item.id)
+
+        if (usetteGodkjenteIds.length > 0) {
+          setTilbud(prev =>
+            prev.map(item =>
+              usetteGodkjenteIds.includes(item.id) ? { ...item, settSomLest: true } : item
+            )
+          )
+          setValgtTilbud(prev =>
+            prev && usetteGodkjenteIds.includes(prev.id) ? { ...prev, settSomLest: true } : prev
+          )
+          for (const id of usetteGodkjenteIds) {
+            void markerSomLest(id)
+          }
+        }
+      }
+
       setAktivFilter(filter)
       if (!firmaId) return
       setPillAckKlar(true)
@@ -404,7 +516,7 @@ export default function TilbudScreen() {
         void lagreTilbudPillAckDel(firmaId, 'godkjent', ts)
       }
     },
-    [firmaId]
+    [aktivFilter, filtrert, firmaId]
   )
 
   const swipeData = useMemo<SwipeListItem[]>(
@@ -568,7 +680,13 @@ export default function TilbudScreen() {
           filter: `firma_id=eq.${firmaId}`,
         },
         payload => {
-          const nyRad = payload.new as { id?: string; status?: string } | null
+          const nyRad = payload.new as {
+            id?: string
+            status?: string
+            godkjent_dato?: string | null
+            sist_oppdatert_dato?: string | null
+            sett_som_lest?: boolean | null
+          } | null
           const gammelRad = payload.old as { status?: string } | null
           const nyStatus = nyRad?.status
 
@@ -602,14 +720,32 @@ export default function TilbudScreen() {
             setTilbud(prev =>
               prev.map(item =>
                 item.id === tilbudId
-                  ? { ...item, status: nyStatus as Forespørsel['status'] }
+                  ? {
+                      ...item,
+                      status: nyStatus as Forespørsel['status'],
+                      godkjentDato:
+                        nyStatus === 'godkjent'
+                          ? (nyRad?.godkjent_dato ?? item.godkjentDato)
+                          : item.godkjentDato,
+                      sistOppdatertDato: nyRad?.sist_oppdatert_dato ?? item.sistOppdatertDato,
+                      settSomLest: nyRad?.sett_som_lest ?? item.settSomLest,
+                    }
                   : item
               )
             )
 
             setValgtTilbud(prev =>
               prev?.id === tilbudId
-                ? { ...prev, status: nyStatus as Forespørsel['status'] }
+                ? {
+                    ...prev,
+                    status: nyStatus as Forespørsel['status'],
+                    godkjentDato:
+                      nyStatus === 'godkjent'
+                        ? (nyRad?.godkjent_dato ?? prev.godkjentDato)
+                        : prev.godkjentDato,
+                    sistOppdatertDato: nyRad?.sist_oppdatert_dato ?? prev.sistOppdatertDato,
+                    settSomLest: nyRad?.sett_som_lest ?? prev.settSomLest,
+                  }
                 : prev
             )
             return
@@ -652,13 +788,14 @@ export default function TilbudScreen() {
         >
           <TilbudKort
             tilbud={item}
+            godkjentOutline={aktivFilter === 'Godkjent'}
             opptaksDemoTrykkPulse={item.id === opptaksDemoKortPulseId}
             onPress={t => void åpneTilbud(t)}
           />
         </Animated.View>
       )
     },
-    [førsteKortKey, nudgeAnim, åpneTilbud]
+    [aktivFilter, førsteKortKey, nudgeAnim, åpneTilbud, opptaksDemoKortPulseId]
   )
 
   const håndterRowDidOpen = useCallback(
@@ -853,6 +990,7 @@ export default function TilbudScreen() {
             onRequestVelgTjeneste={tilbudFlyt.åpneTjenesteVelger}
             utkastKilde={tilbudFlyt.utkastKilde}
             onConsumedUtkastKilde={tilbudFlyt.konsumerUtkastKilde}
+            onRequestFullforProfil={() => setVisProfilBlokkering(true)}
             onSendt={async navn => {
               await hentTilbud()
               const postSendDemoId = consumeOfferFlowPostSendDetaljerDemo()
@@ -875,6 +1013,12 @@ export default function TilbudScreen() {
           }}
         />
 
+        <FullforBedriftsprofilModal
+          visible={visProfilBlokkering}
+          onClose={() => setVisProfilBlokkering(false)}
+          onFullforProfil={håndterFullforProfil}
+        />
+
         <TilbudDetaljerModal
           tilbud={valgtTilbud}
           visible={valgtTilbud !== null}
@@ -893,6 +1037,9 @@ export default function TilbudScreen() {
             hentTilbud()
             setValgtTilbud(null)
             visToast(`Jobb markert som utført (${navn})`)
+          }}
+          onUtfortFeil={melding => {
+            visToast(melding, 'feil')
           }}
         />
     </SafeAreaView>
@@ -983,8 +1130,8 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    flexWrap: 'nowrap',
+    gap: 6,
     paddingLeft: 2,
   },
   filterPillWrap: {
@@ -993,7 +1140,7 @@ const styles = StyleSheet.create({
   filterPill: {
     height: 32,
     borderRadius: 999,
-    paddingHorizontal: 16,
+    paddingHorizontal: 13,
     alignItems: 'center',
     justifyContent: 'center',
   },

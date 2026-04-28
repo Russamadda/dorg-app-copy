@@ -24,6 +24,15 @@ export async function prefetchTilbudHendelser(tilbudId: string): Promise<TilbudH
       cache.set(tilbudId, result)
       return result
     })
+    .catch(error => {
+      console.warn('[tilbudHendelserCache] Prefetch feilet, bruker tom historikk', {
+        tilbudId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      const fallback: TilbudHendelse[] = []
+      cache.set(tilbudId, fallback)
+      return fallback
+    })
     .finally(() => {
       inflight.delete(tilbudId)
     })
@@ -31,4 +40,3 @@ export async function prefetchTilbudHendelser(tilbudId: string): Promise<TilbudH
   inflight.set(tilbudId, promise)
   return promise
 }
-

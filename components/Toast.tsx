@@ -105,10 +105,10 @@ export function Toast({ melding, type, synlig, onHide, layoutPreset = 'floatingT
         { opacity, transform: [{ translateY }] },
       ]}
     >
-      <View style={styles.surface}>
+      <View style={[styles.surface, type === 'feil' ? styles.surfaceFeil : styles.surfaceSuksess]}>
         <BlurView
-          intensity={72}
-          tint="light"
+          intensity={24}
+          tint="dark"
           experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
           style={StyleSheet.absoluteFill}
         />
@@ -139,26 +139,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 11,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: '#143826',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.38)',
+    borderColor: 'rgba(126,240,169,0.42)',
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#B0BAC8',
+    shadowColor: '#062315',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.12,
     shadowRadius: 18,
     elevation: 5,
   },
+  surfaceSuksess: {
+    backgroundColor: '#143826',
+    borderColor: 'rgba(126,240,169,0.42)',
+  },
+  surfaceFeil: {
+    backgroundColor: '#4A1E22',
+    borderColor: 'rgba(248,113,113,0.42)',
+  },
   tint: {
     ...StyleSheet.absoluteFillObject,
   },
   tintSuksess: {
-    backgroundColor: 'rgba(230,236,245,0.8)',
+    backgroundColor: 'rgba(27,67,50,0.88)',
   },
   tintFeil: {
-    backgroundColor: 'rgba(243,227,233,0.82)',
+    backgroundColor: 'rgba(74,30,34,0.9)',
   },
   tekst: {
     fontSize: 14,
@@ -168,9 +176,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   tekstSuksess: {
-    color: '#243033',
+    color: '#F3FFF7',
   },
   tekstFeil: {
-    color: '#7A3145',
+    color: '#FFF5F5',
   },
 })

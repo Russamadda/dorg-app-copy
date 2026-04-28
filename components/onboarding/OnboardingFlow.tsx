@@ -32,20 +32,23 @@ type Step = 1 | 2 | 3 | 4
 type Props = {
   userId: string
   firma: Firma | null
+  initialFirmanavn?: string
   onFerdig: (oppdatertFirma: Firma) => void
 }
 
 const PLACEHOLDER_FIRMANAVN = 'Min bedrift'
 const MAX_ACTIVE_TJENESTER = 6
 
-export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
+export default function OnboardingFlow({ userId, firma, initialFirmanavn = '', onFerdig }: Props) {
   const keyboard = useAnimatedKeyboard()
   const hasFirmaRef = useRef(Boolean(firma?.id))
   const initSignaturRef = useRef<string | null>(null)
   const stepCommitFrameRef = useRef<number | null>(null)
+  const firmanavnManueltEndretRef = useRef(false)
 
-  const [step, setStep] = useState<Step>(1)
+  const [step, setStep] = useState<Step>(() => deriveOnboardingStep(firma))
   const [direction, setDirection] = useState<1 | -1>(1)
+  const [animateStepChange, setAnimateStepChange] = useState(false)
 
   const [firmanavn, setFirmanavn] = useState('')
   const [fagkategori, setFagkategori] = useState<string | null>(null)
@@ -70,10 +73,16 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
     const nesteSteg = deriveOnboardingStep(firma)
     setStep(nesteSteg)
     setDirection(1)
+    setAnimateStepChange(false)
     hasFirmaRef.current = Boolean(firma?.id)
 
+    firmanavnManueltEndretRef.current = false
     const navn = firma?.firmanavn?.trim() ?? ''
+    const prefillNavn = initialFirmanavn.trim()
     setFirmanavn(navn && navn !== PLACEHOLDER_FIRMANAVN ? navn : '')
+    if ((!navn || navn === PLACEHOLDER_FIRMANAVN) && prefillNavn) {
+      setFirmanavn(prefillNavn)
+    }
     setFagkategori(firma?.fagkategori ?? null)
     setTjenester(firma?.tjenester ?? [])
     setTimepris(firma?.timepris != null && firma.timepris > 0 ? String(firma.timepris) : '')
@@ -82,7 +91,16 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
     setLagrer(false)
 
     initSignaturRef.current = initSignatur
-  }, [firma, userId])
+  }, [firma, initialFirmanavn, userId])
+
+  useEffect(() => {
+    const prefillNavn = initialFirmanavn.trim()
+    if (!prefillNavn || firmanavnManueltEndretRef.current) {
+      return
+    }
+
+    setFirmanavn(current => (current.trim() ? current : prefillNavn))
+  }, [initialFirmanavn])
 
   const tilgjengeligeTjenester = useMemo(
     () => tjenesterForKategori(fagkategori).slice(0, 6),
@@ -127,6 +145,7 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
     }
     const nesteRetning: 1 | -1 = nesteSteg > step ? 1 : -1
     setDirection(nesteRetning)
+    setAnimateStepChange(true)
     setFeil(null)
 
     // Viktig: la direction committe på nåværende steg først, slik at exiting-retning blir korrekt.
@@ -305,6 +324,7 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
             label="Firmanavn"
             value={firmanavn}
             onChangeText={text => {
+              firmanavnManueltEndretRef.current = true
               setFirmanavn(text)
               if (feil) setFeil(null)
             }}
@@ -588,6 +608,7 @@ export default function OnboardingFlow({ userId, firma, onFerdig }: Props) {
           <OnboardingStepStage
             step={step}
             direction={direction}
+            animateStepChange={animateStepChange}
             renderStep={renderStep}
           />
         </Animated.View>

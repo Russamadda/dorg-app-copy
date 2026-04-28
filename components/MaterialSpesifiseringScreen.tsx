@@ -1,8 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert,
   Animated,
   Keyboard,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -10,7 +10,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -21,6 +20,10 @@ import {
   sokMaterialKatalog,
   type MaterialKatalogItem,
 } from '../lib/materialForslag'
+import {
+  beregnMaterialPrisDetaljer,
+  beregnTilbudPrisLinjer,
+} from '../lib/tilbudPris'
 import {
   beregnMaterialLinjeTotal,
   byggMaterialSpesifiseringRad,
@@ -38,12 +41,14 @@ import {
 type Props = {
   valgtTjeneste: string
   valgtMaterialkostnad: number
+  materialPaslag: number
   rader: MaterialSpesifiseringRad[]
   tilbudstekstHarMaterialoversikt: boolean
   onClose: () => void
   onApplyMaterialsum: (brukITilbudstekst: boolean) => void
   onDeleteRow: (id: string) => void
   onSaveRow: (row: MaterialSpesifiseringRad) => void
+  onFjernFraTilbudstekst?: () => void
 }
 
 function formaterEnhetstittel(enhet: string): string {
@@ -163,17 +168,20 @@ function SearchResultRow({
 function MaterialSpesifiseringScreenInner({
   valgtTjeneste,
   valgtMaterialkostnad,
+  materialPaslag,
   rader,
   tilbudstekstHarMaterialoversikt,
   onClose,
   onApplyMaterialsum,
   onDeleteRow,
   onSaveRow,
+  onFjernFraTilbudstekst,
 }: Props) {
   const [søkeTekst, setSøkeTekst] = useState('')
   const [aktivDraft, setAktivDraft] = useState<AktivDraft | null>(null)
   const [antallInput, setAntallInput] = useState('')
   const [visEnhetMeny, setVisEnhetMeny] = useState(false)
+  const [visTilbudstekstDialog, setVisTilbudstekstDialog] = useState(false)
   const antallPop = useRef(new Animated.Value(1)).current
   const sokefeltRef = useRef<import('react-native').TextInput>(null)
 
@@ -196,6 +204,24 @@ function MaterialSpesifiseringScreenInner({
   const spesifisertMaterialsum = useMemo(
     () => summerMaterialSpesifisering(rader),
     [rader]
+  )
+  const spesifisertPrisDetaljer = useMemo(
+    () =>
+      beregnMaterialPrisDetaljer({
+        materialkostnad: spesifisertMaterialsum,
+        materialPaslag,
+      }),
+    [materialPaslag, spesifisertMaterialsum]
+  )
+  const estimertMaterialprisInklMva = useMemo(
+    () =>
+      beregnTilbudPrisLinjer({
+        timer: 0,
+        materialkostnad: valgtMaterialkostnad,
+        timepris: 0,
+        materialPaslag,
+      }).materialerInklMva,
+    [materialPaslag, valgtMaterialkostnad]
   )
   const kanOppdatereMaterialpris = harBrukbareMaterialrader(rader)
   const aktivLinjeTotal = aktivDraft
@@ -325,36 +351,22 @@ function MaterialSpesifiseringScreenInner({
   const primærKnappDisabled = rader.length === 0
   const primærKnappTekst = 'Bekreft'
 
-  async function bekreftOppdatering() {
-    const harVist = await AsyncStorage.getItem('dorg_materialspec_notifikasjon_vist')
-    if (!harVist && !tilbudstekstHarMaterialoversikt) {
-      Alert.alert(
-        'Legg til i tilbudsteksten?',
-        'Ønsker du å legge til materialspesifikasjonen i tilbudsteksten?',
-        [
-          {
-            text: 'Nei',
-            style: 'cancel',
-            onPress: async () => {
-              await AsyncStorage.setItem('dorg_materialspec_notifikasjon_vist', 'true')
-              onApplyMaterialsum(false)
-            },
-          },
-          {
-            text: 'Ja',
-            onPress: async () => {
-              await AsyncStorage.setItem('dorg_materialspec_notifikasjon_vist', 'true')
-              onApplyMaterialsum(true)
-            },
-          },
-        ]
-      )
+  function bekreftOppdatering() {
+    if (!tilbudstekstHarMaterialoversikt) {
+      setVisTilbudstekstDialog(true)
     } else {
-      onApplyMaterialsum(false)
+      // Seksjon allerede i teksten — oppdater stille
+      onApplyMaterialsum(true)
     }
   }
 
+  function svarPåTilbudstekstDialog(brukITilbudstekst: boolean) {
+    setVisTilbudstekstDialog(false)
+    onApplyMaterialsum(brukITilbudstekst)
+  }
+
   return (
+    <>
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <View style={styles.headerSideSpacer} />
@@ -663,6 +675,15 @@ function MaterialSpesifiseringScreenInner({
             <Ionicons name="add" size={18} color="#aaaaaa" />
             <Text style={styles.leggTilMaterialTekst}>Legg til materiale</Text>
           </TouchableOpacity>
+          {tilbudstekstHarMaterialoversikt && onFjernFraTilbudstekst ? (
+            <TouchableOpacity
+              onPress={onFjernFraTilbudstekst}
+              activeOpacity={0.75}
+              style={styles.fjernFraInlineButton}
+            >
+              <Text style={styles.fjernFraTekst}>Fjern fra tilbudstekst</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </KeyboardAwareScrollView>
 
@@ -677,26 +698,48 @@ function MaterialSpesifiseringScreenInner({
           <View pointerEvents="none" style={styles.summaryCardGlow} />
           <View style={styles.summaryCardContent}>
             <View style={styles.summaryTopRow}>
-              <Text style={styles.summaryTotalLabel}>Spesifisert materialpris</Text>
+              <Text style={styles.summaryTotalLabel}>Materialer inkl. mva</Text>
               <Text
                 style={styles.summaryTotalValue}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.72}
               >
-                {formaterKr(spesifisertMaterialsum)}
+                {formaterKr(spesifisertPrisDetaljer.materialerInklMva)}
               </Text>
             </View>
             <View style={styles.summaryCardDivider} />
+            <View style={styles.summaryDetailRow}>
+              <Text style={styles.summaryDetailLabel}>Registrert eks. mva</Text>
+              <Text
+                style={styles.summaryDetailValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+              >
+                {formaterKr(spesifisertPrisDetaljer.registrertEksMva)}
+              </Text>
+            </View>
+            <View style={styles.summaryDetailRow}>
+              <Text style={styles.summaryDetailLabel}>{`Påslag (+${Math.round(materialPaslag)}% Påslag)`}</Text>
+              <Text
+                style={styles.summaryDetailValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+              >
+                {formaterKr(spesifisertPrisDetaljer.paslagBelop)}
+              </Text>
+            </View>
             <View style={styles.summaryEstimateRow}>
-              <Text style={styles.summaryEstimateLabel}>Estimert materialpris</Text>
+              <Text style={styles.summaryEstimateLabel}>Nåværende estimat inkl. mva</Text>
               <Text
                 style={styles.summaryEstimateValue}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.78}
               >
-                {formaterKr(valgtMaterialkostnad)}
+                {formaterKr(estimertMaterialprisInklMva)}
               </Text>
             </View>
           </View>
@@ -724,6 +767,38 @@ function MaterialSpesifiseringScreenInner({
         </TouchableOpacity>
       </View>
     </SafeAreaView>
+    <Modal
+      visible={visTilbudstekstDialog}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setVisTilbudstekstDialog(false)}
+    >
+      <View style={styles.confirmOverlay}>
+        <View style={styles.confirmDialog}>
+          <Text style={styles.confirmTitle}>Legg til i tilbudsteksten?</Text>
+          <Text style={styles.confirmBody}>
+            Ønsker du å legge til materialspesifikasjonen i tilbudsteksten?
+          </Text>
+          <View style={styles.confirmActions}>
+            <TouchableOpacity
+              onPress={() => svarPåTilbudstekstDialog(false)}
+              activeOpacity={0.85}
+              style={styles.confirmButton}
+            >
+              <Text style={styles.confirmButtonText}>Nei</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => svarPåTilbudstekstDialog(true)}
+              activeOpacity={0.85}
+              style={styles.confirmButton}
+            >
+              <Text style={styles.confirmButtonText}>Ja</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+    </>
   )
 }
 
@@ -731,6 +806,61 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#000000',
+  },
+  confirmOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 40,
+    backgroundColor: 'rgba(0,0,0,0.54)',
+  },
+  confirmDialog: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: '#141615',
+    paddingHorizontal: 26,
+    paddingTop: 26,
+    paddingBottom: 22,
+    alignItems: 'center',
+  },
+  confirmTitle: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 22,
+    lineHeight: 28,
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  confirmBody: {
+    marginTop: 14,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 18,
+    lineHeight: 26,
+    color: 'rgba(255,255,255,0.68)',
+    textAlign: 'center',
+  },
+  confirmActions: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 28,
+  },
+  confirmButton: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  confirmButtonText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 19,
+    lineHeight: 24,
+    color: '#FFFFFF',
+    textAlign: 'center',
   },
   header: {
     minHeight: 52,
@@ -821,6 +951,11 @@ const styles = StyleSheet.create({
     height: 24,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  fjernFraInlineButton: {
+    alignSelf: 'center',
+    paddingTop: 6,
+    paddingBottom: 4,
   },
   flatList: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -1218,7 +1353,8 @@ const styles = StyleSheet.create({
   summaryCardContent: {
     paddingHorizontal: 18,
     paddingTop: 10,
-    paddingBottom: 5,
+    paddingBottom: 8,
+    minHeight: 96,
   },
   summaryTopRow: {
     flexDirection: 'row',
@@ -1235,12 +1371,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     flex: 1,
     paddingBottom: 0,
-    transform: [{ translateY: -12 }],
+    transform: [{ translateY: -11 }],
   },
   summaryTotalValue: {
     fontFamily: 'DMSans_700Bold',
-    fontSize: 34,
-    lineHeight: 38,
+    fontSize: 30,
+    lineHeight: 34,
     letterSpacing: -0.8,
     color: '#FFFFFF',
     textAlign: 'right',
@@ -1256,6 +1392,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+    marginTop: 'auto',
+  },
+  summaryDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 4,
+  },
+  summaryDetailLabel: {
+    flex: 1,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#D2D8E0',
+  },
+  summaryDetailValue: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 15,
+    lineHeight: 20,
+    color: '#FFFFFF',
+    textAlign: 'right',
   },
   summaryEstimateLabel: {
     flex: 1,
@@ -1263,7 +1421,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: '#D2D8E0',
-    transform: [{ translateY: 3 }],
+    transform: [{ translateY: -2 }],
   },
   summaryEstimateValue: {
     fontFamily: 'DMSans_600SemiBold',
@@ -1297,6 +1455,13 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: '#6B7280',
     letterSpacing: 0.2,
+  },
+  fjernFraTekst: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+    textDecorationLine: 'underline',
   },
 })
 

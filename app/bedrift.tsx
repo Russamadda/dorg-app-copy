@@ -17,13 +17,14 @@ import {
   UIManager,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useFocusEffect, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { Ionicons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
 import { LinearGradient } from 'expo-linear-gradient'
 import { hentFirma, hentLokalAuthSession, oppdaterFirma, lastOppLogo, loggUt } from '../lib/supabase'
 import { getCachedFirma, setCachedFirma } from '../lib/firmaCache'
+import { erMinimumFirmaprofilFullfort } from '../lib/firmaSetup'
 import { hentAutoPaminnelserEnabled, setAutoPaminnelserEnabled } from '../lib/paminnelseInnstillinger'
 import { tjenesterForKategori } from '../constants/tjenester'
 import type { Firma } from '../types'
@@ -71,21 +72,6 @@ function normaliserAktiveTjenester(firma: Firma | null): string[] {
   return tjenester.slice(0, MAX_AKTIVE_TJENESTER)
 }
 
-function harTekstverdi(verdi?: string | null): boolean {
-  return Boolean(verdi?.trim())
-}
-
-function erBedriftProfilDetaljerFullfort(firma: Firma | null): boolean {
-  if (!firma) return false
-  return (
-    harTekstverdi(firma.orgNummer) &&
-    harTekstverdi(firma.telefon) &&
-    harTekstverdi(firma.epost) &&
-    harTekstverdi(firma.adresse) &&
-    harTekstverdi(firma.poststed)
-  )
-}
-
 type BedriftProfilDraft = {
   firmanavn: string
   orgNummer: string
@@ -128,6 +114,7 @@ function erSammeBedriftProfilDraft(a: BedriftProfilDraft, b: BedriftProfilDraft)
 
 export default function BedriftScreen() {
   const router = useRouter()
+  const { openProfile: openProfileRaw } = useLocalSearchParams<{ openProfile?: string | string[] }>()
   const insets = useSafeAreaInsets()
   const cachedFirma = getCachedFirma()
 
@@ -154,10 +141,11 @@ export default function BedriftScreen() {
   const logoFeilToastForUrlRef = useRef<string | null>(null)
   const profilDraftRef = useRef(profilDraft)
   const visModalRef = useRef(visModal)
+  const sisteOpenProfileRef = useRef<string | null>(null)
   const sistSynketProfilDraftRef = useRef<BedriftProfilDraft>(byggBedriftProfilDraft(cachedFirma))
   const alleTjenester = firma?.tjenester ?? []
   const aktiveTjenester = normaliserAktiveTjenester(firma)
-  const visProfilFullforHint = !erBedriftProfilDetaljerFullfort(firma)
+  const visProfilFullforHint = !erMinimumFirmaprofilFullfort(firma)
   const tilgjengeligeTjenester = useMemo(
     () => tjenesterForKategori(firma?.fagkategori),
     [firma?.fagkategori]
@@ -259,6 +247,16 @@ export default function BedriftScreen() {
   useEffect(() => {
     visModalRef.current = visModal
   }, [visModal])
+
+  useEffect(() => {
+    const openProfile = Array.isArray(openProfileRaw) ? openProfileRaw[0] : openProfileRaw
+    if (!openProfile || !firma || sisteOpenProfileRef.current === openProfile) {
+      return
+    }
+
+    sisteOpenProfileRef.current = openProfile
+    setVisModal(true)
+  }, [firma, openProfileRaw])
 
   useEffect(() => {
     const forrigeSynketDraft = sistSynketProfilDraftRef.current
@@ -415,7 +413,7 @@ export default function BedriftScreen() {
 
   async function handleLoggUt() {
     await loggUt()
-    router.replace('/auth')
+    router.replace('/auth/velkommen')
   }
 
   if (laster) {
@@ -543,6 +541,43 @@ export default function BedriftScreen() {
             {firma.orgNummer ? ` · Org.nr ${firma.orgNummer}` : ''}
           </Text>
         </View>
+
+        {visProfilFullforHint ? (
+          <View style={styles.blockingProfileCard}>
+            <View style={styles.blockingProfileTopRow}>
+              <View style={styles.blockingProfileIcon}>
+                <Ionicons name="alert-circle-outline" size={22} color="#FFFFFF" />
+              </View>
+              <View style={styles.blockingProfileCopy}>
+                <Text style={styles.blockingProfileTitle}>Fullfør bedriftsprofil</Text>
+                <Text style={styles.blockingProfileText}>
+                  Vi trenger firmaadresse, telefon og e-post før du lager første tilbud.
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => setVisModal(true)}
+              style={styles.blockingProfileButton}
+              activeOpacity={0.86}
+              accessibilityRole="button"
+              accessibilityLabel="Fullfør profil"
+            >
+              <Text style={styles.blockingProfileButtonText}>Fullfør profil</Text>
+              <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            onPress={() => setVisModal(true)}
+            style={styles.editProfileButton}
+            activeOpacity={0.86}
+            accessibilityRole="button"
+            accessibilityLabel="Rediger profil"
+          >
+            <Ionicons name="create-outline" size={17} color="#1B4332" />
+            <Text style={styles.editProfileButtonText}>Rediger profil</Text>
+          </TouchableOpacity>
+        )}
 
         <View style={styles.priceGrid}>
           <View style={styles.metricCard}>
@@ -1117,6 +1152,83 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_400Regular',
     color: '#888888',
     textAlign: 'center',
+  },
+  blockingProfileCard: {
+    marginTop: 6,
+    marginBottom: 14,
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(24,100,58,0.18)',
+    shadowColor: '#B0BAC8',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 7,
+  },
+  blockingProfileTopRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  blockingProfileIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: authOnboardingColors.cta,
+  },
+  blockingProfileCopy: {
+    flex: 1,
+  },
+  blockingProfileTitle: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 17,
+    lineHeight: 22,
+    color: '#111111',
+  },
+  blockingProfileText: {
+    marginTop: 4,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#666666',
+  },
+  blockingProfileButton: {
+    marginTop: 16,
+    minHeight: 50,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: authOnboardingColors.cta,
+  },
+  blockingProfileButtonText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  editProfileButton: {
+    alignSelf: 'center',
+    marginTop: 2,
+    marginBottom: 14,
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(24,100,58,0.16)',
+  },
+  editProfileButtonText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    color: '#1B4332',
   },
   priceGrid: {
     flexDirection: 'row',
