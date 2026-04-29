@@ -90,7 +90,6 @@ import {
 import { byggStubTilbudForRecordingDemo } from '../lib/demoRecording/stubTilbudForRecordingDemo'
 import {
   byggMaterialSpesifiseringRad,
-  byggMaterialSpesifiseringSignatur,
   fjernMaterialoversiktFraTilbudTekst,
   harBrukbareMaterialrader,
   harMaterialraderForTekst,
@@ -279,8 +278,6 @@ export default function NyttTilbudModal({
   const [visMaterialSpesifisering, setVisMaterialSpesifisering] = useState(false)
   const [brukMaterialerITilbudstekst, setBrukMaterialerITilbudstekst] = useState(false)
   const [materialSpesifiseringRader, setMaterialSpesifiseringRader] = useState<MaterialSpesifiseringRad[]>([])
-  const [materialSpesifiseringAppliedSignature, setMaterialSpesifiseringAppliedSignature] =
-    useState<string | null>(null)
 
   const [sender, setSender] = useState(false)
   const [feil, setFeil] = useState<{
@@ -329,7 +326,6 @@ export default function NyttTilbudModal({
     setVisMaterialSpesifisering(false)
     setBrukMaterialerITilbudstekst(false)
     setMaterialSpesifiseringRader([])
-    setMaterialSpesifiseringAppliedSignature(null)
 
     setSender(false)
     setFeil({})
@@ -473,7 +469,6 @@ export default function NyttTilbudModal({
     setVisMaterialSpesifisering(false)
     setBrukMaterialerITilbudstekst(false)
     setMaterialSpesifiseringRader([])
-    setMaterialSpesifiseringAppliedSignature(null)
 
     void hentTilbudMaterialer(utkastKilde.id)
       .then(materialer => {
@@ -586,7 +581,6 @@ export default function NyttTilbudModal({
     if (!materialSpesifiseringRader.length) return
     setBrukMaterialerITilbudstekst(brukITilbudstekst)
     setMateriale(spesifisertMaterialsum)
-    setMaterialSpesifiseringAppliedSignature(materialSpesifiseringSignatur)
   }
 
   function tilbakeTilSkjemaFraBeskrivelse() {
@@ -864,11 +858,6 @@ export default function NyttTilbudModal({
       return
     }
 
-    if (!prosjektAdresse.trim()) {
-      setGenerellFeil('Fyll inn prosjektadresse eller område')
-      return
-    }
-
     setSender(true)
     setGenerellFeil('')
 
@@ -997,23 +986,12 @@ export default function NyttTilbudModal({
     !!generertTekst &&
     !!kundeNavn.trim() &&
     !!kundeEpost.trim() &&
-    erGyldigEpost(kundeEpost) &&
-    !!prosjektAdresse.trim()
+    erGyldigEpost(kundeEpost)
   const spesifisertMaterialsum = useMemo(
     () => summerMaterialSpesifisering(materialSpesifiseringRader),
     [materialSpesifiseringRader]
   )
-  const materialSpesifiseringSignatur = useMemo(
-    () => byggMaterialSpesifiseringSignatur(materialSpesifiseringRader),
-    [materialSpesifiseringRader]
-  )
-  const kanOppdatereMaterialpris = harBrukbareMaterialrader(materialSpesifiseringRader)
   const kanBrukeMaterialerITekst = harMaterialraderForTekst(materialSpesifiseringRader)
-  const materialprisErOppdatertFraSpesifisering =
-    kanOppdatereMaterialpris &&
-    materialSpesifiseringAppliedSignature !== null &&
-    materialSpesifiseringAppliedSignature === materialSpesifiseringSignatur &&
-    materiale === spesifisertMaterialsum
 
   useEffect(() => {
     if (!kanBrukeMaterialerITekst && brukMaterialerITilbudstekst) {
@@ -1168,7 +1146,6 @@ export default function NyttTilbudModal({
 
   const kundeSkjemaKanFerdigstilles =
     !!kundeNavn.trim() &&
-    !!kundeTelefon.trim() &&
     !!kundeEpost.trim() &&
     erGyldigEpost(kundeEpost)
 

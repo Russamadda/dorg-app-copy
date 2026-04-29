@@ -11,9 +11,7 @@ import { Colors } from '../constants/colors'
 
 const ACTIVE_COLOR = Colors.primary
 const INACTIVE_COLOR = '#888888'
-const GLASS_FILL = 'rgba(255,255,255,0.14)'
 const GLASS_OVERLAY = 'rgba(255,255,255,0.18)'
-const GLASS_HIGHLIGHT = 'rgba(255,255,255,0.18)'
 const GLASS_EDGE = 'rgba(255,255,255,0.12)'
 const GLASS_BLUR_INTENSITY = 72
 const FAB_SIZE = 68

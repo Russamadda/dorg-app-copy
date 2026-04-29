@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Dimensions, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
 import Animated, {
   Easing,
   KeyboardState,
   ReduceMotion,
-  runOnJS,
   useAnimatedKeyboard,
   useAnimatedStyle,
   useSharedValue,
@@ -42,14 +41,9 @@ export default function AuthCardStage({
   const [viewportWidth, setViewportWidth] = useState(Dimensions.get('window').width - 40)
   const [authHeight, setAuthHeight] = useState(0)
   const [forgotHeight, setForgotHeight] = useState(0)
-  const [transitioning, setTransitioning] = useState(false)
 
   const authX = useSharedValue(activePanel === 'forgot' ? -viewportWidth : 0)
   const forgotX = useSharedValue(activePanel === 'forgot' ? 0 : viewportWidth)
-
-  const finishTransition = useCallback(() => {
-    setTransitioning(false)
-  }, [])
 
   useEffect(() => {
     authX.value = activePanel === 'forgot' ? -viewportWidth : 0
@@ -64,27 +58,18 @@ export default function AuthCardStage({
     if (previousPanel === activePanel) return
 
     previousPanelRef.current = activePanel
-    setTransitioning(true)
 
     if (activePanel === 'forgot') {
       forgotX.value = viewportWidth
       authX.value = withTiming(-viewportWidth, CARD_TRANSITION)
-      forgotX.value = withTiming(0, CARD_TRANSITION, finished => {
-        if (finished) {
-          runOnJS(finishTransition)()
-        }
-      })
+      forgotX.value = withTiming(0, CARD_TRANSITION)
       return
     }
 
     authX.value = -viewportWidth
     forgotX.value = withTiming(viewportWidth, CARD_TRANSITION)
-    authX.value = withTiming(0, CARD_TRANSITION, finished => {
-      if (finished) {
-        runOnJS(finishTransition)()
-      }
-    })
-  }, [activePanel, authX, finishTransition, forgotX, viewportWidth])
+    authX.value = withTiming(0, CARD_TRANSITION)
+  }, [activePanel, authX, forgotX, viewportWidth])
 
   const stageAnimatedStyle = useAnimatedStyle(() => {
     const keyboardVisible =

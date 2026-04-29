@@ -993,7 +993,7 @@ export async function lastOppLogo(
   }
 
   const filExt = uri.split('.').pop()?.toLowerCase().split('?')[0] ?? 'jpg'
-  const filNavn = `logo-${userId}-${Date.now()}.${filExt}`
+  const filNavn = `${userId}/logo-${Date.now()}.${filExt}`
   const contentType = `image/${filExt === 'jpg' ? 'jpeg' : filExt}`
 
   const { error: uploadError } = await supabase.storage

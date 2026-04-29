@@ -21,7 +21,6 @@ import { BlurView } from 'expo-blur'
 import * as Haptics from 'expo-haptics'
 import { SwipeListView } from 'react-native-swipe-list-view'
 import {
-  supabase,
   hentForespørsler,
   hentFirma,
   hentLokalAuthSession,

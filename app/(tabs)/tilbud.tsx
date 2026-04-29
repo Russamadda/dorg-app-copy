@@ -96,67 +96,6 @@ const filterStatuser: Record<FilterLabel, string[] | null> = {
   Alle: null,
 }
 
-// TEMP DEMO DATA - remove after screenshot
-// Slett hele denne blokken + linjen med TEMP_DEMO_TILBUD i hentTilbud-funksjonen
-const _makeDemoTilbud = (): Forespørsel[] => {
-  const nå = Date.now()
-  const dagSiden = (n: number) => new Date(nå - n * 24 * 60 * 60 * 1000).toISOString()
-  return [
-    {
-      id: '__demo_gulvbytte__',
-      kundeNavn: 'Kari Hansen',
-      kundeEpost: 'demo@example.com',
-      jobbBeskrivelse: 'Gulvbytte i stue og gang, ca. 60 kvm parkett',
-      kortBeskrivelse: 'Gulvbytte',
-      adresse: 'Åsane, Bergen',
-      prisEksMva: 38800,
-      status: 'sendt',
-      opprettetDato: dagSiden(0),
-      sendtDato: dagSiden(0),
-      forsteSendtDato: dagSiden(0),
-      sistSendtDato: dagSiden(0),
-      firmaId: '__demo__',
-      jobbType: 'Gulvbytte',
-    },
-    {
-      id: '__demo_kjokkenmontering__',
-      kundeNavn: 'Thomas Nilsen',
-      kundeEpost: 'demo@example.com',
-      jobbBeskrivelse: 'Montering av nytt IKEA-kjøkken inkl. hvitevarer',
-      kortBeskrivelse: 'Kjøkkenmontering',
-      adresse: 'Fana, Bergen',
-      prisEksMva: 69520,
-      status: 'sendt',
-      opprettetDato: dagSiden(3),
-      sendtDato: dagSiden(3),
-      forsteSendtDato: dagSiden(3),
-      sistSendtDato: dagSiden(3),
-      firmaId: '__demo__',
-      jobbType: 'Kjøkkenmontering',
-    },
-    {
-      id: '__demo_takrenovering__',
-      kundeNavn: 'Ingrid Berg',
-      kundeEpost: 'demo@example.com',
-      jobbBeskrivelse: 'Totalrenovering av tak inkl. ny isolasjon og taktekking',
-      kortBeskrivelse: 'Takrenovering',
-      adresse: 'Kalfaret, Bergen',
-      prisEksMva: 113600,
-      status: 'paminnelse_sendt',
-      opprettetDato: dagSiden(7),
-      sendtDato: dagSiden(7),
-      forsteSendtDato: dagSiden(7),
-      sistSendtDato: dagSiden(7),
-      forstePaminnelseSendtDato: dagSiden(4),
-      antallPaminnelser: 1,
-      firmaId: '__demo__',
-      jobbType: 'Takrenovering',
-    },
-  ]
-}
-const TEMP_DEMO_TILBUD = _makeDemoTilbud()
-// END TEMP DEMO DATA
-
 const listAnimationConfig = {
   duration: 220,
   create: {
@@ -309,9 +248,9 @@ export default function TilbudScreen() {
       setCachedFirma(firmaData)
       if (firmaData) {
         const data = await hentSendteTilbud(firmaData.id)
-        setTilbud([...TEMP_DEMO_TILBUD, ...data]) // TEMP DEMO DATA - remove after screenshot
+        setTilbud(data)
       } else {
-        setTilbud([...TEMP_DEMO_TILBUD]) // TEMP DEMO DATA - remove after screenshot
+        setTilbud([])
       }
     } catch (err) {
       console.error(err)
@@ -451,8 +390,8 @@ export default function TilbudScreen() {
 
   const prikkGodkjent = useMemo(
     () =>
-      pillAckKlar && skalVisePillGodkjent(tilbudListe, pillAck.godkjentAckAt),
-    [pillAckKlar, tilbudListe, pillAck.godkjentAckAt]
+      pillAckKlar && skalVisePillGodkjent(tilbudListe),
+    [pillAckKlar, tilbudListe]
   )
 
   const tabBadgeTeller = prikkJustering || prikkGodkjent ? 1 : 0

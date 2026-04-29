@@ -16,7 +16,7 @@ export function skalVisePillJustering(liste: Forespørsel[], justeringAckAt: num
   )
 }
 
-export function skalVisePillGodkjent(liste: Forespørsel[], godkjentAckAt: number): boolean {
+export function skalVisePillGodkjent(liste: Forespørsel[]): boolean {
   return liste.some(t => t.status === 'godkjent' && !t.settSomLest)
 }
 

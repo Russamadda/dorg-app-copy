@@ -5,7 +5,6 @@ import Animated, {
   Easing,
   KeyboardState,
   ReduceMotion,
-  interpolate,
   useAnimatedKeyboard,
   useAnimatedStyle,
   useSharedValue,

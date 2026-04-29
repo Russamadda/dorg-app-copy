@@ -522,7 +522,7 @@ export default function BedriftScreen() {
                 resizeMode="cover"
                 accessibilityLabel="Firmalogo"
                 onError={() => {
-                  console.warn('[bedrift] Logo visning feilet (hovedside):', firma.logoUrl)
+                  console.warn('[bedrift] Logo visning feilet (hovedside)')
                   setHovedLogoLastFeilet(true)
                   const u = firma.logoUrl ?? ''
                   if (logoFeilToastForUrlRef.current !== u) {
@@ -871,10 +871,7 @@ function RedigerModal({
                     style={modalStyles.logoImage}
                     resizeMode="cover"
                     onError={() => {
-                      console.warn(
-                        '[bedrift] Logo forhåndsvisning feilet (modal):',
-                        draft.logoUrl
-                      )
+                      console.warn('[bedrift] Logo forhåndsvisning feilet (modal)')
                       if (logoForhandsvisningFeiletForUrlRef.current !== draft.logoUrl) {
                         logoForhandsvisningFeiletForUrlRef.current = draft.logoUrl
                         onBrukerMerknad?.(

@@ -31,7 +31,6 @@ import {
   formaterAntallInput,
   formaterBelopInput,
   formaterKr,
-  harBrukbareMaterialrader,
   parseAntallInput,
   parseBelopInput,
   summerMaterialSpesifisering,
@@ -223,7 +222,6 @@ function MaterialSpesifiseringScreenInner({
       }).materialerInklMva,
     [materialPaslag, valgtMaterialkostnad]
   )
-  const kanOppdatereMaterialpris = harBrukbareMaterialrader(rader)
   const aktivLinjeTotal = aktivDraft
     ? beregnMaterialLinjeTotal(aktivDraft.antall, aktivDraft.prisPerEnhet)
     : 0

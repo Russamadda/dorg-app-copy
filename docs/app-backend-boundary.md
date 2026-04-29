@@ -30,6 +30,9 @@ No runtime dependency remains on:
 - `POST /api/app/send-tilbud-epost`
 - `POST /api/app/send-paminnelse-epost`
 - `POST /api/app/oppsummer-justering`
+- `POST /api/app/opprett-utfort-snapshot`
+- `POST /api/app/hent-utfort-snapshot`
+- `POST /api/app/eksporter-utfort-pdf`
 
 Payload contracts are mirrored in `lib/appBackendContract.ts`.
 
